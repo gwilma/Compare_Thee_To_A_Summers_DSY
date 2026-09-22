@@ -21,6 +21,16 @@ pytest
 3. **③ Compare**: pick an observed year and a library location. The app ranks every reference file by similarity
    across the metrics and weights you choose.
 
+### On an Ubuntu VPS
+
+`scripts/deploy_vps.sh` installs the app as a service behind nginx, with a password and optional HTTPS.
+Re-run it to update.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/gwilma/Compare_Thee_To_A_Summers_DSY/claude/weather-overheating-analysis-y14bhk/scripts/deploy_vps.sh
+sudo DOMAIN=dsy.example.com EMAIL=you@example.com bash deploy_vps.sh   # or just: sudo bash deploy_vps.sh
+```
+
 ## Metrics
 
 | Metric | Definition |
