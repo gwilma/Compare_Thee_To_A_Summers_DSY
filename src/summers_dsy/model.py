@@ -46,13 +46,19 @@ class WeatherSeries:
     def years(self) -> list[int]:
         return sorted(set(self.data.index.year))
 
-    def year(self, year: int) -> "WeatherSeries":
-        """The calendar-year slice of a multi-year observed record."""
-        sub = self.data[self.data.index.year == year]
-        if sub.empty:
+    def year(self, year: int, spinup_days: int = 31, name: str | None = None) -> "WeatherSeries":
+        """One calendar year of a multi-year observed record.
+
+        The slice starts ``spinup_days`` before 1 January (where the record
+        allows) so the running mean is warmed up by the preceding weather.
+        """
+        start = pd.Timestamp(year=year, month=1, day=1) - pd.Timedelta(days=spinup_days)
+        end = pd.Timestamp(year=year + 1, month=1, day=1)
+        sub = self.data[(self.data.index >= start) & (self.data.index < end)]
+        if not (sub.index.year == year).any():
             raise KeyError(f"No data for {year} in {self.name}")
         meta = {**self.meta, "year": year}
-        return WeatherSeries(f"{self.name} {year}", sub, self.source, meta)
+        return WeatherSeries(name or str(year), sub, self.source, meta)
 
     def completeness(self) -> float:
         """Fraction of expected hours that have a valid dry-bulb value."""
