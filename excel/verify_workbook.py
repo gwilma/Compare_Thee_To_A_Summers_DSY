@@ -64,7 +64,7 @@ def main(path: str) -> int:
     # Similarity ranking
     lib = [r for r in lb.iter_rows(min_row=6, max_col=7 + len(METRICS), values_only=True) if r[0] == 1]
     ref = pd.DataFrame([r[7:] for r in lib], columns=METRICS, index=[r[6] for r in lib]).astype(float)
-    weights = {k: cp.cell(row=8, column=2 + j).value for j, k in enumerate(METRICS)}
+    weights = {k: cp.cell(row=13 + j, column=8).value for j, k in enumerate(METRICS)}
     used = [k for k in METRICS if weights[k]]
     ranked = similarity(xl_metrics, ref, used, weights)
     xl_top = [(cp.cell(row=12 + k, column=2).value, cp.cell(row=12 + k, column=4).value) for k in range(1, 11)]

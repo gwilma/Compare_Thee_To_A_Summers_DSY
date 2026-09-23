@@ -31,6 +31,16 @@ curl -fsSLO https://raw.githubusercontent.com/gwilma/Compare_Thee_To_A_Summers_D
 sudo DOMAIN=dsy.example.com EMAIL=you@example.com bash deploy_vps.sh   # or just: sudo bash deploy_vps.sh
 ```
 
+### Excel edition
+
+`excel/summers_dsy.xlsx` does the same analysis with live Excel formulas, with no Python needed. Paste a year of
+hourly data (Year, Month, Day, Hour, dry bulb: EPW columns 1–4 and 7) into **Hourly**. **Dashboard** and **Summary**
+recalculate. Build a **Library** by running each CIBSE file through the workbook and pasting its Summary row as
+values. **Compare** then ranks the library. Start with the *Read me* sheet. It ships with synthetic demo data.
+
+`python excel/build_workbook.py` regenerates the workbook. `python excel/verify_workbook.py <recalculated.xlsx>`
+checks every metric and the similarity ranking against the Python package.
+
 ## Metrics
 
 | Metric | Definition |

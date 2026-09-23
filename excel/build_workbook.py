@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.chart import AreaChart, BarChart, LineChart, Reference
+from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.shapes import GraphicalProperties
 from openpyxl.comments import Comment
 from openpyxl.drawing.line import LineProperties
@@ -34,7 +34,7 @@ from summers_dsy.synthetic import WarmSpell, demo_library, synthetic_year  # noq
 
 OUT = Path(__file__).resolve().parent / "summers_dsy.xlsx"
 
-N_HOURS = 10_000  # hourly rows available (a year plus a preceding December fits)
+N_HOURS = int(__import__("os").environ.get("WB_HOURS", 10_000))  # hourly rows available (a year plus a preceding December fits)
 N_DAYS = 420
 N_LIB = 100
 H0, H1 = 2, N_HOURS + 1  # hourly data rows
@@ -158,20 +158,20 @@ def build():
          "the 93rd centile from the location's current-climate TRY. The demo value came from the demo TRY.", True),
         (23, "TWCDH offset override (K)", round(thr.twcdh_offset, 3), "twcdh_override",
          "Leave blank to use row 25. Demo value from the demo TRY.", True),
-        (24, "SWCDH threshold derived from this file (°C)", "=PERCENTILE(Hourly!$R$2:$R$10001,0.93)", "swcdh_auto",
+        (24, "SWCDH threshold derived from this file (°C)", f'=IF(COUNT(Hourly!$R$2:$R${H1})=0,"",PERCENTILE(Hourly!$R$2:$R${H1},0.93))', "swcdh_auto",
          "93rd centile of in-season hourly dry-bulb (Eames 2016 regional threshold convention).", False),
-        (25, "TWCDH offset derived from this file (K)", "=PERCENTILE(Hourly!$S$2:$S$10001,0.93)", "twcdh_auto",
+        (25, "TWCDH offset derived from this file (K)", f'=IF(COUNT(Hourly!$S$2:$S${H1})=0,"",PERCENTILE(Hourly!$S$2:$S${H1},0.93))', "twcdh_auto",
          "93rd centile of in-season (T − Tcomf).", False),
-        (26, "SWCDH threshold used (°C)", '=IF(swcdh_override="",swcdh_auto,swcdh_override)', "swcdh_thr", "Calculated.", False),
-        (27, "TWCDH offset used (K)", '=IF(twcdh_override="",twcdh_auto,twcdh_override)', "twcdh_off", "Calculated.", False),
+        (26, "SWCDH threshold used (°C)", '=IF(swcdh_override<>"",swcdh_override,N(swcdh_auto))', "swcdh_thr", "Calculated.", False),
+        (27, "TWCDH offset used (K)", '=IF(twcdh_override<>"",twcdh_override,N(twcdh_auto))', "twcdh_off", "Calculated.", False),
         (29, "Hot day: daily max ≥ (°C)", 28, "hot_thr", "", True),
         (30, "Warm night: daily min ≥ (°C)", 16, "night_thr", "", True),
         (31, "Warm-event day: daily WCDH > (K²h)", 0, "event_min", "A warm event is a run of consecutive in-season days above this.", True),
-        (33, "First day in data", "=INT(MIN(Hourly!$F$2:$F$10001))", "first_day", "Calculated.", False),
-        (34, "Number of days in data", "=INT(MAX(Hourly!$F$2:$F$10001))-first_day+1", "n_days",
+        (33, "First day in data", f"=INT(MIN(Hourly!$F$2:$F${H1}))", "first_day", "Calculated.", False),
+        (34, "Number of days in data", f"=INT(MAX(Hourly!$F$2:$F${H1}))-first_day+1", "n_days",
          f"Calculated. Daily sheet holds up to {N_DAYS} days.", False),
-        (35, "Analysis year", "=YEAR(MAX(Hourly!$F$2:$F$10001))", "analysis_year", "Year of the last day of data.", False),
-        (36, "Rows of hourly data", "=MAX(1,COUNT(Hourly!$F$2:$F$10001))", "n_rows",
+        (35, "Analysis year", f"=YEAR(MAX(Hourly!$F$2:$F${H1}))", "analysis_year", "Year of the last day of data.", False),
+        (36, "Rows of hourly data", f"=MAX(1,COUNT(Hourly!$F$2:$F${H1}))", "n_rows",
          "Calculated. Hourly rows must be in time order with no gaps between rows.", False),
     ]
     for r, label, value, nm, note, is_input in settings:
@@ -354,7 +354,7 @@ def build():
         r = 5 + i
         label, unit, desc = METRIC_INFO[key]
         sm[f"A{r}"] = label
-        sm[f"B{r}"] = metric_formula[key]
+        sm[f"B{r}"] = f'=IFERROR({metric_formula[key][1:]},"")'
         sm[f"C{r}"] = unit
         sm[f"D{r}"] = desc
         for c_ in "ACD":
@@ -446,10 +446,10 @@ def build():
         cc.column_dimensions[c_].width = 11
         cc.column_dimensions[zc].width = 8
         cc[f"{c_}{labels_row}"] = METRIC_INFO[key][0]
-        cc[f"{c_}{w_row}"] = f"=Compare!{col(2 + j)}$8"
+        cc[f"{c_}{w_row}"] = f"=Compare!$H${13 + j}"
         cc[f"{c_}{log_row}"] = 1 if key in LOG_METRICS else 0
         cc[f"{c_}{t_row}"] = f"={summary_row[key]}"
-        cc[f"{c_}{tt_row}"] = f"=IF({c_}{log_row}=1,LN(1+MAX(0,{c_}{t_row})),{c_}{t_row})"
+        cc[f"{c_}{tt_row}"] = f'=IF(NOT(ISNUMBER({c_}{t_row})),0,IF({c_}{log_row}=1,LN(1+MAX(0,{c_}{t_row})),{c_}{t_row}))'
         rng = f"{c_}${R0}:{c_}${R1}"
         cc[f"{c_}{n_row}"] = f"=COUNT({rng})+1"
         cc[f"{c_}{mean_row}"] = f"=(SUM({rng})+{c_}{tt_row})/{c_}{n_row}"
@@ -495,30 +495,32 @@ def build():
     cp.column_dimensions["A"].width = 26
     cp["A4"] = "Result"
     cp["A4"].font = f(11, True)
-    cp["B4"] = (f'=IF(COUNT({SCORE})=0,"Add reference files to the Library sheet and set Include to 1.",'
+    cp["B4"] = (f'=IF(COUNT(Summary!$B$5:$B${4 + len(METRICS)})<{len(METRICS)},"Load at least a full season of hourly data on the Hourly sheet.",'
+                f'IF(COUNT({SCORE})=0,"Add reference files to the Library sheet and set Include to 1.",'
                 f'analysis_year&" at "&site_name&" was most similar to "&INDEX({LABEL},MATCH(MAX({KEY}),{KEY},0))'
-                f'&" for "&INDEX({LOC},MATCH(MAX({KEY}),{KEY},0))&" (similarity "&TEXT(MAX({SCORE}),"0")&"/100).")')
+                f'&" for "&INDEX({LOC},MATCH(MAX({KEY}),{KEY},0))&" (similarity "&TEXT(MAX({SCORE}),"0")&"/100)."))')
     cp["B4"].font = f(12, True)
-    header_row(cp, 7, ["Metric"] + [METRIC_INFO[k][0] for k in METRICS])
-    cp.row_dimensions[7].height = 44
-    cp["A8"] = "Weight (0 = ignore)"
-    cp["A8"].font = f(10, True)
+    header_row(cp, 12, ["Metric", "Weight (0 = ignore)", "Observed value"], start_col=7)
+    cp.column_dimensions["F"].width = 3
+    cp.column_dimensions["G"].width = 24
+    cp.column_dimensions["H"].width = 11
+    cp.column_dimensions["I"].width = 13
     for j, key in enumerate(METRICS):
-        c = cp.cell(row=8, column=2 + j, value=1 if key in DEFAULT_COMPARISON_METRICS else 0)
-        mark_input(c)
-        cp.column_dimensions[col(2 + j)].width = 12
-    cp["A9"] = "Observed value"
-    cp["A9"].font = f(10, True)
-    for j, key in enumerate(METRICS):
-        c = cp.cell(row=9, column=2 + j, value=f"={summary_row[key]}")
+        r = 13 + j
+        cp.cell(row=r, column=7, value=f"{METRIC_INFO[key][0]} ({METRIC_INFO[key][1]})").font = f()
+        mark_input(cp.cell(row=r, column=8, value=1 if key in DEFAULT_COMPARISON_METRICS else 0))
+        c = cp.cell(row=r, column=9, value=f"={summary_row[key]}")
         c.font = f()
         c.number_format = "#,##0.0"
-    cp["A10"] = "Defaults match the app: WCDH, TWCDH, SWCDH, peak daily WCDH, max event severity, longest event, peak temperature, season mean."
-    cp["A10"].font = f(9, color=INK2, italic=True)
+    cp.cell(row=14 + len(METRICS), column=7,
+            value="Defaults match the app: WCDH, TWCDH, SWCDH, peak daily WCDH, max event severity, longest event, "
+                  "peak temperature and season mean.").font = f(9, color=INK2, italic=True)
 
-    header_row(cp, 12, ["Rank", "Reference file", "Location", "Similarity"])
+    header_row(cp, 12, ["Rank", "Reference file", "Location", "Similarity", "Short label"])
     cp.column_dimensions["B"].width = 44
     cp.column_dimensions["C"].width = 20
+    cp.column_dimensions["D"].width = 10
+    cp.column_dimensions["E"].width = 26
     for k in range(1, 11):
         r = 12 + k
         cp[f"A{r}"] = k
@@ -528,6 +530,8 @@ def build():
         cp[f"C{r}"] = f'=IF(COUNT({KEY})<{k},"",INDEX({LOC},MATCH({key_},{KEY},0)))'
         cp[f"D{r}"] = f'=IF(COUNT({KEY})<{k},0,INDEX({SCORE},MATCH({key_},{KEY},0)))'
         cp[f"D{r}"].number_format = "0"
+        cp[f"E{r}"] = f'=SUBSTITUTE(SUBSTITUTE(B{r}," emissions","")," percentile","")'
+        cp[f"E{r}"].font = f(9, color=INK2)
         for c_ in "BCD":
             cp[f"{c_}{r}"].font = f()
 
@@ -551,19 +555,19 @@ def build():
     bar = BarChart()
     bar.type = "bar"
     bar.style = 10
-    bar.title = "Closest reference files"
+    bar.title = None
     bar.y_axis.title = "Similarity (0–100)"
     bar.y_axis.scaling.min = 0
     bar.y_axis.scaling.max = 100
     bar.x_axis.scaling.orientation = "maxMin"
     bar.add_data(Reference(cp, min_col=4, min_row=12, max_row=22), titles_from_data=True)
-    bar.set_categories(Reference(cp, min_col=2, min_row=13, max_row=22))
+    bar.set_categories(Reference(cp, min_col=5, min_row=13, max_row=22))
     bar.series[0].graphicalProperties = GraphicalProperties(solidFill=BLUE)
     bar.series[0].graphicalProperties.line = LineProperties(noFill=True)
     bar.legend = None
     bar.gapWidth = 60
     bar.height, bar.width = 9, 18
-    cp.add_chart(bar, "F12")
+    cp.add_chart(bar, "A25")
 
     # ---------------------------------------------------------- Chart data (1 Apr – 30 Sep)
     title(cd, "Chart data", "1 April – 30 September of the analysis year, looked up from the Daily sheet.")
@@ -614,36 +618,49 @@ def build():
         v.alignment = Alignment(horizontal="left")
     dash.row_dimensions[9].height = 30
 
-    area = AreaChart()
-    area.grouping = "stacked"
-    area.add_data(Reference(cd, min_col=2, max_col=3, min_row=4, max_row=CR), titles_from_data=True)
-    area.series[0].graphicalProperties = GraphicalProperties(noFill=True)
-    area.series[0].graphicalProperties.line = LineProperties(noFill=True)
-    area.series[1].graphicalProperties = GraphicalProperties(solidFill="E6E5E0")
-    area.series[1].graphicalProperties.line = LineProperties(noFill=True)
-    line = LineChart()
-    line.add_data(Reference(cd, min_col=2, min_row=4, max_row=CR), titles_from_data=True)
-    line.add_data(Reference(cd, min_col=4, max_col=6, min_row=4, max_row=CR), titles_from_data=True)
-    for s, color, dash_style, width in zip(line.series, (BLUE, ORANGE, AQUA, MUTED), (None, None, None, "sysDot"), (2, 2, 2, 1)):
-        s.graphicalProperties.line.solidFill = color
-        s.graphicalProperties.line.width = int(width * 12700)
+    # One line chart on a single temperature axis, with the diurnal range as columns in a chart below.
+    prof = LineChart()
+    for c_idx in (2, 5, 6, 4):
+        prof.add_data(Reference(cd, min_col=c_idx, min_row=4, max_row=CR), titles_from_data=True)
+    for s_, color, dash_style, width in zip(prof.series, (BLUE, AQUA, MUTED, ORANGE), (None, None, "sysDot", None), (2, 2, 1, 2)):
+        s_.graphicalProperties.line.solidFill = color
+        s_.graphicalProperties.line.width = int(width * 12700)
         if dash_style:
-            s.graphicalProperties.line.dashStyle = dash_style
-        s.smooth = False
-        s.marker.symbol = "none"
+            s_.graphicalProperties.line.dashStyle = dash_style
+        s_.smooth = False
+        s_.marker.symbol = "none"
     cats = Reference(cd, min_col=1, min_row=C0, max_row=CR)
-    area.set_categories(cats)
-    line.set_categories(cats)
-    area.title = "Daily maximum, minimum and range, with comfort temperature (1 Apr – 30 Sep)"
-    area.y_axis.title = "°C"
-    area.x_axis.number_format = "d mmm"
-    area.x_axis.tickLblSkip = 30
-    area.x_axis.tickMarkSkip = 30
-    area.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill="E1E0D9"))
-    area.legend.position = "b"
-    area += line
-    area.height, area.width = 10, 26
-    dash.add_chart(area, "B11")
+    prof.set_categories(cats)
+    prof.title = None
+    prof.y_axis.title = "°C"
+    prof.x_axis.number_format = "d mmm"
+    prof.x_axis.tickLblSkip = 30
+    prof.x_axis.tickMarkSkip = 30
+    prof.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill="E1E0D9"))
+    prof.legend.position = "b"
+    prof.height, prof.width = 10, 26
+    dash["B11"] = "Daily maximum and minimum, comfort temperature Tcomf and upper limit Tmax, 1 April – 30 September"
+    dash["B11"].font = f(11, True)
+
+    rng = BarChart()
+    rng.add_data(Reference(cd, min_col=3, min_row=4, max_row=CR), titles_from_data=True)
+    rng.set_categories(cats)
+    rng.series[0].graphicalProperties = GraphicalProperties(solidFill="B7B6AF")
+    rng.series[0].graphicalProperties.line = LineProperties(noFill=True)
+    rng.gapWidth = 40
+    rng.title = None
+    rng.legend = None
+    rng.y_axis.title = "Range (K)"
+    rng.y_axis.scaling.min = 0
+    rng.x_axis.number_format = "d mmm"
+    rng.x_axis.tickLblSkip = 30
+    rng.x_axis.tickMarkSkip = 30
+    rng.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill="E1E0D9"))
+    rng.height, rng.width = 5, 26
+    dash["B34"] = "Diurnal range: daily maximum minus daily minimum (K)"
+    dash["B34"].font = f(10, True)
+    dash.add_chart(rng, "B35")
+    dash.add_chart(prof, "B13")
 
     cum = LineChart()
     cum.add_data(Reference(cd, min_col=7, min_row=4, max_row=CR), titles_from_data=True)
@@ -651,20 +668,22 @@ def build():
     cum.series[0].graphicalProperties.line.solidFill = BLUE
     cum.series[0].graphicalProperties.line.width = 25400
     cum.series[0].marker.symbol = "none"
-    cum.title = "Cumulative WCDH through the season (steep steps = intense spells; long climbs = prolonged spells)"
+    cum.title = "Cumulative WCDH through the season"
     cum.y_axis.title = "K²h"
     cum.x_axis.number_format = "d mmm"
     cum.x_axis.tickLblSkip = 30
     cum.x_axis.tickMarkSkip = 30
     cum.legend = None
     cum.height, cum.width = 8, 13
-    dash.add_chart(cum, "B32")
+    dash.add_chart(cum, "B49")
+    dash["B48"] = "Steep steps are short, intense spells (DSY2-like). Long steady climbs are prolonged spells (DSY3-like)."
+    dash["B48"].font = f(9, color=INK2)
 
     bar2 = BarChart()
     bar2.type = "bar"
     bar2.title = "Closest reference files (similarity 0–100)"
     bar2.add_data(Reference(cp, min_col=4, min_row=12, max_row=22), titles_from_data=True)
-    bar2.set_categories(Reference(cp, min_col=2, min_row=13, max_row=22))
+    bar2.set_categories(Reference(cp, min_col=5, min_row=13, max_row=22))
     bar2.series[0].graphicalProperties = GraphicalProperties(solidFill=BLUE)
     bar2.series[0].graphicalProperties.line = LineProperties(noFill=True)
     bar2.x_axis.scaling.orientation = "maxMin"
@@ -673,7 +692,7 @@ def build():
     bar2.legend = None
     bar2.gapWidth = 60
     bar2.height, bar2.width = 8, 13
-    dash.add_chart(bar2, "I32")
+    dash.add_chart(bar2, "I49")
 
     # ---------------------------------------------------------- Read me
     readme.column_dimensions["A"].width = 3
