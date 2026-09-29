@@ -38,8 +38,22 @@ hourly data (Year, Month, Day, Hour, dry bulb: EPW columns 1–4 and 7) into **H
 recalculate. Build a **Library** by running each CIBSE file through the workbook and pasting its Summary row as
 values. **Compare** then ranks the library. Start with the *Read me* sheet. It ships with synthetic demo data.
 
-`python excel/build_workbook.py` regenerates the workbook. `python excel/verify_workbook.py <recalculated.xlsx>`
-checks every metric and the similarity ranking against the Python package.
+**Importing a whole folder.** `excel/summers_dsy.xlsm` is the same workbook with an `ImportWeatherFolder` macro
+(source in `excel/FolderImport.bas`):
+- It walks a folder and all its sub-folders and loads each `.epw`/`.csv` file in turn.
+- It adds each file's metrics to the Library, replacing any row for the same file identity.
+- It reads location, file type, period, emissions and percentile from CIBSE 2016 or 2025 file names, falling back
+  to the folder name.
+- It derives each location's SWCDH/TWCDH thresholds from that location's TRY and stores them with each row.
+  `UseLibraryThresholds` copies them into Settings.
+
+Everything is recorded on the **Import log** sheet.
+
+`python excel/build_workbook.py` regenerates the `.xlsx`. `python excel/add_macros.py` then compiles
+`FolderImport.bas` into the `.xlsm` (this needs LibreOffice and `python3-uno`).
+`python excel/verify_workbook.py <recalculated.xlsx>` checks every metric and the similarity ranking against the
+Python package. `python excel/test_folder_import.py` runs the macro inside LibreOffice on a test folder tree and
+checks every imported row.
 
 ## Metrics
 
@@ -47,9 +61,9 @@ checks every metric and the similarity ranking against the Python package.
 |---|---|
 | Running mean Trm | `(1−α)(Tod−1 + αTod−2 + α²Tod−3 + …)` with α = 0.8, evaluated recursively. The recursion is seeded with the BS EN 15251 7-day approximation. Design years wrap round from December; each observed year uses the preceding December. |
 | Comfort temperature | `Tcomf = 0.33·Trm + 18.8`. Upper limit `Tmax = Tcomf + 2/3/4 K` for Category I/II/III (TM52/TM59 use II). |
-| WCDH | `Σ max(0, T − Tcomf)²` over the season (Eames 2016). This is the metric behind the CIBSE 2016 probabilistic DSYs. |
+| WCDH | `Σ max(0, T − Tcomf)²` over the season: the adaptive-comfort form of the metric (Eames 2016). |
 | TWCDH | `Σ max(0, T − (Tcomf + ΔT_region))²` |
-| SWCDH | `Σ max(0, T − T_static)²`, where `T_static` is the regional 93rd-centile temperature. |
+| SWCDH | `Σ max(0, T − T_static)²`, where `T_static` is the regional 93rd-centile temperature. CIBSE ranks DSY1 (a 1-in-7 year) by SWCDH; DSY2 has the most intense heat event and DSY3 the longest. |
 | Warm events | Runs of days with daily WCDH > 0, characterised by duration, severity (total WCDH) and intensity (peak daily WCDH). These separate DSY2 (short and intense) from DSY3 (long). |
 | TM52 analogues | Hours with ΔT ≥ 1 K above Tmax, the maximum daily weighted exceedance, and the maximum ΔT. All are computed on outdoor air. |
 | Other | Peak temperature, mean daily max and min, season mean, April–September mean (the original TM49 ranking), hot days, warm nights and CDH above 22 °C. |

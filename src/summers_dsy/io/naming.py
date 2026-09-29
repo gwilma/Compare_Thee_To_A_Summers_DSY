@@ -1,8 +1,9 @@
 """Read CIBSE weather-file metadata (location, file type, period, scenario) from file names.
 
-CIBSE names its files along the lines of ``London_LHR_DSY1_2050High50.epw`` or
-``Manchester_TRY.csv``; naming varies between releases, so this is lenient and
-every field can be corrected in the app.
+CIBSE names its files along the lines of ``London_LHR_DSY1_2050High50.epw`` (2016
+release, 14 locations) or ``Z1_DSY1_2050s_HIGH50_CIBSE_v1.1.epw`` (2025 release, 28
+numbered zones); naming varies between releases, so this is lenient and every
+field can be corrected in the app.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ CIBSE_LOCATIONS = {
 }
 
 KINDS = ["TRY", "DSY1", "DSY2", "DSY3"]
-PERIODS = ["Baseline", "2020s", "2050s", "2080s"]
+PERIODS = ["Baseline", "2020s", "2030s", "2050s", "2080s"]
 EMISSIONS = ["Low", "Medium", "High"]
 PERCENTILES = [10, 50, 90]
 
@@ -42,7 +43,10 @@ def parse_reference_name(filename: str) -> dict:
     flat = re.sub(r"[^a-z0-9]", "", low)
 
     location = None
-    for loc, tokens in CIBSE_LOCATIONS.items():
+    zone = re.search(r"(?<![a-z0-9])z(?:one)?[\s_\-]*(\d{1,2})(?!\d)", low)
+    if zone:
+        location = f"Zone {int(zone.group(1))}"
+    for loc, tokens in ([] if location else CIBSE_LOCATIONS.items()):
         if any(tok.replace("_", "") in flat for tok in tokens):
             location = loc
             break
@@ -66,7 +70,7 @@ def parse_reference_name(filename: str) -> dict:
         period = "Baseline"
 
     emissions = None
-    m = re.search(r"(low|medium|med|high)", low)
+    m = re.search(r"(?<![a-z])(low|medium|med|high)(?=\d|[\s_\-.]|$)", low)
     if m and period not in (None, "Baseline"):
         emissions = {"low": "Low", "med": "Medium", "medium": "Medium", "high": "High"}[m.group(1)]
 

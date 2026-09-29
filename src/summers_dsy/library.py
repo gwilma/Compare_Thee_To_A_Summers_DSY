@@ -116,7 +116,7 @@ class Library:
         df["emissions"] = df["emissions"].replace("", None)
         df["percentile"] = df["percentile"].replace(0, None)
         df["label"] = df.apply(lambda r: reference_label(r.to_dict()), axis=1)
-        order = {"Baseline": 0, "2020s": 1, "2050s": 2, "2080s": 3}
+        order = {"Baseline": 0, "2020s": 1, "2030s": 2, "2050s": 3, "2080s": 4}
         return (
             df.assign(_p=df["period"].map(order).fillna(9), _e=df["emissions"].map({"Low": 0, "Medium": 1, "High": 2}).fillna(-1))
             .sort_values(["location", "_p", "kind", "_e", "percentile"])

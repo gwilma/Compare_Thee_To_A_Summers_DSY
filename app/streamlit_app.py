@@ -530,9 +530,9 @@ with tab_about:
 
 ### Weighted cooling degree hours (Eames 2016; Liu *et al.* 2016)
 Summed over the hours of the season (TM59: 1 May to 30 September):
-* **WCDH** $= \sum \max(0,\,T - T_{comf})^2$. This is the metric used to select the CIBSE 2016 probabilistic DSYs.
+* **WCDH** $= \sum \max(0,\,T - T_{comf})^2$, the adaptive-comfort form of the metric (Eames 2016).
 * **TWCDH** $= \sum \max(0,\,T - (T_{comf} + \Delta T_{region}))^2$, where the comfort temperature is adjusted by a regional offset.
-* **SWCDH** $= \sum \max(0,\,T - T_{static})^2$, where $T_{static}$ is a regional 93rd-centile temperature.
+* **SWCDH** $= \sum \max(0,\,T - T_{static})^2$, where $T_{static}$ is a regional 93rd-centile temperature. CIBSE selects DSY1 as the year with a 1-in-7 return period ranked by SWCDH; DSY2 is the year with the most intense heat event and DSY3 the year with the longest.
 
 When not set manually, the regional values are derived from the location's current-climate TRY (or DSY1) in the library.
 $T_{static}$ is the 93rd centile of in-season hourly temperature, and $\Delta T_{region}$ is the 93rd centile of $T - T_{comf}$.

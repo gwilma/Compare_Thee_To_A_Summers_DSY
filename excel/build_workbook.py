@@ -36,7 +36,7 @@ OUT = Path(__file__).resolve().parent / "summers_dsy.xlsx"
 
 N_HOURS = int(__import__("os").environ.get("WB_HOURS", 10_000))  # hourly rows available (a year plus a preceding December fits)
 N_DAYS = 420
-N_LIB = 100
+N_LIB = 2500  # the full CIBSE 2025 set (28 zones × 4 file types × 18 scenarios) is 2,016 files
 H0, H1 = 2, N_HOURS + 1  # hourly data rows
 D0, D1 = 2, N_DAYS + 1  # daily rows
 L0, L1 = 6, N_LIB + 5  # library rows
@@ -126,6 +126,7 @@ def build():
     cp = wb.create_sheet("Compare")
     cc = wb.create_sheet("Compare calc")
     cd = wb.create_sheet("Chart data")
+    lg = wb.create_sheet("Import log")
 
     # ---------------------------------------------------------- Settings
     title(st, "Settings", "Yellow cells with blue text are inputs. Everything else is calculated.")
@@ -173,6 +174,12 @@ def build():
         (35, "Analysis year", f"=YEAR(MAX(Hourly!$F$2:$F${H1}))", "analysis_year", "Year of the last day of data.", False),
         (36, "Rows of hourly data", f"=MAX(1,COUNT(Hourly!$F$2:$F${H1}))", "n_rows",
          "Calculated. Hourly rows must be in time order with no gaps between rows.", False),
+        (41, "Folder to import (ImportWeatherFolder macro)", None, "import_folder",
+         "Optional. Leave blank to be asked for a folder when the macro runs. All sub-folders are included.", True),
+        (42, "Thresholds for imported files", "Each location's TRY", "import_thr_mode",
+         "'Each location's TRY': the macro derives the SWCDH threshold and TWCDH offset for each location from its "
+         "earliest-period TRY (else DSY1) and uses them for all of that location's files. 'Settings overrides': "
+         "every file uses rows 22–23.", True),
     ]
     for r, label, value, nm, note, is_input in settings:
         st.cell(row=r, column=1, value=label).font = f()
@@ -200,6 +207,7 @@ def build():
     for rng, options in (
         ("B5", '"Yes,No"'), ("B7", '"1-24 (hour ending),0-23 (hour beginning)"'),
         ("B17", '"Exponential,7-day approximation"'), ("B18", '"I,II,III"'), ("B20", '"Yes,No"'),
+        ("B42", '"Each location\'s TRY,Settings overrides"'),
     ):
         dv = DataValidation(type="list", formula1=options, allow_blank=False)
         st.add_data_validation(dv)
@@ -385,21 +393,23 @@ def build():
 
     # ---------------------------------------------------------- Library
     title(lb, "Library of reference weather files",
-          "One row per CIBSE TRY/DSY file. Run each file through the workbook with the same Settings thresholds, "
-          "then paste its Summary row here as values. Set Include to 1 for the files to compare.")
+          "One row per CIBSE TRY/DSY file. Fill it with the ImportWeatherFolder macro (a folder and all its sub-folders), "
+          "or by pasting a Summary row as values. Include = 1 marks the files to compare.")
     lb["A3"] = ("Demo rows are synthetic (not CIBSE data), calculated by the Python app with the Settings demo thresholds. "
                 "Delete them before adding your own files.")
     lb["A3"].font = f(9, color="C00000", italic=True)
     lib_head = ["Include (1/0)", "Location", "File type", "Period", "Emissions", "Percentile", "Label"] + [
-        f"{METRIC_INFO[k][0]} ({METRIC_INFO[k][1]})" for k in METRICS]
+        f"{METRIC_INFO[k][0]} ({METRIC_INFO[k][1]})" for k in METRICS] + [
+        "SWCDH threshold used (°C)", "TWCDH offset used (K)", "Source file"]
+    c_thr_s, c_thr_t, c_src = 8 + len(METRICS), 9 + len(METRICS), 10 + len(METRICS)  # Z, AA, AB
     header_row(lb, 5, lib_head)
     lb.row_dimensions[5].height = 44
-    for i, w in enumerate([9, 20, 9, 10, 11, 10, 44] + [12] * len(METRICS), start=1):
+    for i, w in enumerate([9, 20, 9, 10, 11, 10, 44] + [12] * len(METRICS) + [12, 12, 60], start=1):
         lb.column_dimensions[col(i)].width = w
     lb.freeze_panes = "H6"
     for i in range(N_LIB):
         r = L0 + i
-        for c_idx in list(range(1, 7)) + list(range(8, 8 + len(METRICS))):
+        for c_idx in list(range(1, 7)) + list(range(8, 8 + len(METRICS))) + [c_thr_s, c_thr_t, c_src]:
             mark_input(lb.cell(row=r, column=c_idx))
         lb[f"G{r}"] = (f'=IF(C{r}="","",C{r}&IF(D{r}="",""," · "&IF(D{r}="Baseline","current climate",D{r}))'
                        f'&IF(E{r}="",""," · "&E{r}&" emissions")&IF(F{r}="",""," · "&F{r}&"th percentile"))')
@@ -416,12 +426,16 @@ def build():
             lb[f"F{r}"] = meta["percentile"]
             for j, key in enumerate(METRICS):
                 lb.cell(row=r, column=8 + j, value=float(m[key]))
-    for rng, options in ((f"A{L0}:A{L1}", '"1,0"'), (f"C{L0}:C{L1}", '"TRY,DSY1,DSY2,DSY3"'),
-                         (f"D{L0}:D{L1}", '"Baseline,2020s,2050s,2080s"'), (f"E{L0}:E{L1}", '"Low,Medium,High"'),
+            lb.cell(row=r, column=c_thr_s, value=thr.static_threshold)
+            lb.cell(row=r, column=c_thr_t, value=thr.twcdh_offset)
+            lb.cell(row=r, column=c_src, value="synthetic demo data")
+    for rng, options in ((f"A{L0}:A{L1}", '"1,0"'), (f"C{L0}:C{L1}", '"TRY,DSY1,DSY2,DSY3,Other"'),
+                         (f"D{L0}:D{L1}", '"Baseline,2020s,2030s,2050s,2080s"'), (f"E{L0}:E{L1}", '"Low,Medium,High"'),
                          (f"F{L0}:F{L1}", '"10,50,90"')):
         dv = DataValidation(type="list", formula1=options, allow_blank=True)
         lb.add_data_validation(dv)
         dv.add(rng)
+    name(wb, "lib_table", f"Library!$A${L0}:${col(c_src)}${L1}")
 
     # ---------------------------------------------------------- Compare calc
     nm = len(METRICS)
@@ -458,7 +472,7 @@ def build():
         cc[f"{zc}{labels_row}"] = f"z² {METRIC_INFO[key][0]}"
         for r in range(R0, R1 + 1):
             lr = L0 + (r - R0)
-            cc[f"{c_}{r}"] = (f'=IF(OR(Library!$A{lr}<>1,Library!{lib_c}{lr}=""),"",'
+            cc[f"{c_}{r}"] = (f'=IF(OR(Library!$A{lr}<>1,AND(compare_loc<>"",Library!$B{lr}<>compare_loc),Library!{lib_c}{lr}=""),"",'
                               f'IF({c_}${log_row}=1,LN(1+MAX(0,Library!{lib_c}{lr})),Library!{lib_c}{lr}))')
             cc[f"{zc}{r}"] = f'=IF({c_}{r}="","",(({c_}{r}-{c_}${tt_row})/{c_}${sdu_row})^2)'
             cc[f"{c_}{r}"].number_format = "0.000"
@@ -473,7 +487,7 @@ def build():
     for r in range(R0, R1 + 1):
         lr = L0 + (r - R0)
         zr = f"{col(z_first)}{r}:{col(z_last)}{r}"
-        cc[f"{c_dist}{r}"] = (f'=IF(OR(Library!$A{lr}<>1,COUNT({zr})=0,{wsum}<=0),"",'
+        cc[f"{c_dist}{r}"] = (f'=IF(OR(Library!$A{lr}<>1,AND(compare_loc<>"",Library!$B{lr}<>compare_loc),COUNT({zr})=0,{wsum}<=0),"",'
                               f'SQRT(SUMPRODUCT({zr},${col(first_m)}${w_row}:${col(last_m)}${w_row})/{wsum}))')
         cc[f"{c_score}{r}"] = f'=IF({c_dist}{r}="","",100*EXP(-{c_dist}{r}))'
         cc[f"{c_key}{r}"] = f'=IF({c_score}{r}="","",{c_score}{r}-ROW()*0.000000001)'
@@ -542,15 +556,33 @@ def build():
     tw = summary_row["wcdh"]
     cp["A5"] = "WCDH context"
     cp["A5"].font = f(10, True)
-    lower = f'_xlfn.MAXIFS({wv},{incl},1,{wv},"<="&{tw})'
-    upper = f'_xlfn.MINIFS({wv},{incl},1,{wv},">"&{tw})'
+    locs = f"Library!$B${L0}:$B${L1}"
+    lc = 'IF(compare_loc="","*",compare_loc)'
+    incl = f"{incl},1,{locs},{lc}"  # included and in the Compare location
+    lower = f'_xlfn.MAXIFS({wv},{incl},{wv},"<="&{tw})'
+    upper = f'_xlfn.MINIFS({wv},{incl},{wv},">"&{tw})'
     lab = lambda v: f"INDEX(Library!$G${L0}:$G${L1},MATCH({v},{wv},0))"  # noqa: E731
-    cp["B5"] = (f'=IF(COUNTIFS({incl},1)=0,"",'
-                f'"WCDH "&TEXT({tw},"#,##0")&" K²h "&IF(COUNTIFS({incl},1,{wv},"<="&{tw})=0,'
+    cp["B5"] = (f'=IF(COUNTIFS({incl})=0,"",'
+                f'"WCDH "&TEXT({tw},"#,##0")&" K²h "&IF(COUNTIFS({incl},{wv},"<="&{tw})=0,'
                 f'"is below every included file (lowest: "&{lab(upper)}&").",'
-                f'IF(COUNTIFS({incl},1,{wv},">"&{tw})=0,"exceeds every included file (highest: "&{lab(lower)}&").",'
+                f'IF(COUNTIFS({incl},{wv},">"&{tw})=0,"exceeds every included file (highest: "&{lab(lower)}&").",'
                 f'"lies between "&{lab(lower)}&" and "&{lab(upper)}&".")))')
     cp["B5"].font = f(10, color=INK2)
+
+    cp["A6"] = "Compare with location"
+    cp["A6"].font = f(10, True)
+    mark_input(cp["B6"])
+    cp["C6"] = "Blank = every included Library row. Otherwise type a location exactly as in Library column B, e.g. Zone 7."
+    cp["C6"].font = f(9, color=INK2)
+    name(wb, "compare_loc", "Compare!$B$6")
+    thr_s = f"Library!${col(c_thr_s)}${L0}:${col(c_thr_s)}${L1}"
+    thr_t = f"Library!${col(c_thr_t)}${L0}:${col(c_thr_t)}${L1}"
+    in_scope = f'(Library!$A${L0}:$A${L1}=1)*((compare_loc="")+({locs}=compare_loc)>0)'
+    mismatch = (f'SUMPRODUCT({in_scope}*({thr_s}<>"")*((ABS({thr_s}-swcdh_thr)>0.005)+(ABS({thr_t}-twcdh_off)>0.005)>0))')
+    cp["B7"] = (f'=IF({mismatch}=0,"","Check thresholds: "&{mismatch}&" of the files being compared were imported with a '
+                f'different SWCDH threshold or TWCDH offset from Settings ("&TEXT(swcdh_thr,"0.00")&" °C, "&TEXT(twcdh_off,"0.00")&" K). '
+                f'Run the UseLibraryThresholds macro, or set the overrides to match, so every file is compared on the same basis.")')
+    cp["B7"].font = f(10, True, color="C00000")
 
     bar = BarChart()
     bar.type = "bar"
@@ -604,6 +636,8 @@ def build():
     dash["B5"].font = f(10, color=INK2)
     dash["B6"] = '="Site: "&site_name&" · SWCDH threshold "&TEXT(swcdh_thr,"0.0")&" °C · TWCDH offset "&TEXT(twcdh_off,"+0.0;-0.0")&" K"'
     dash["B6"].font = f(9, color=MUTED)
+    dash["B7"] = "=Compare!B7"
+    dash["B7"].font = f(10, True, color="C00000")
     tiles = [("WCDH (K²h)", summary_row["wcdh"], "#,##0"), ("Peak temperature (°C)", summary_row["t_max"], "0.0"),
              ("Longest warm event (days)", summary_row["max_event_duration"], "0"),
              ("Hours above Tmax", summary_row["hours_above_upper"], "#,##0"),
@@ -710,21 +744,34 @@ def build():
         ("2. Hourly: paste Year, Month, Day, Hour (1–24) and dry bulb (°C) into columns A–E. From an EPW, copy columns 1–4 and 7. "
          "Leave Year blank for TRY/DSY files. Clear old rows first. Up to 10,000 hours (one year plus the preceding December).", f()),
         ("3. Dashboard and Summary update automatically: daily max/min/range, comfort temperature, WCDH, TWCDH, SWCDH, warm events.", f()),
-        ("4. Library: for each CIBSE file, paste it into Hourly (with Settings → Typical = Yes), then copy the Summary sheet's "
-         "'Row to copy' and Paste Special → Values into a Library row from column H. Fill in location, type, period, emissions, percentile.", f()),
-        ("5. Paste your observed year back into Hourly (Typical = No). Compare and Dashboard show the closest files.", f()),
+        ("4. Library, the quick way (summers_dsy.xlsm): press Alt+F8 (Mac: Tools → Macro → Macros), run ImportWeatherFolder and pick "
+         "a folder. Every .epw and .csv file in it and its sub-folders is loaded in turn and its metrics added to the Library. "
+         "Location, file type, period, emissions and percentile come from the file name (CIBSE 2016 names like "
+         "London_LHR_DSY1_2050High50.epw, or 2025 names like Z1_DSY1_2050s_HIGH50_CIBSE_v1.1.epw), else from the folder name. "
+         "Re-importing a file replaces its row. The Import log sheet lists every file and anything skipped. Your Hourly data and "
+         "Settings are put back afterwards. Allow about 2–5 seconds per file.", f()),
+        ("   The quick way needs macros enabled. A downloaded file may be blocked: in Windows Explorer right-click it → Properties → "
+         "tick Unblock. If Excel reports a problem with the macros, open the VBA editor (Alt+F11) → File → Import File → "
+         "FolderImport.bas (in the repository's excel folder), then save as .xlsm.", f(10, color=INK2)),
+        ("   By hand: paste a CIBSE file into Hourly (Settings → Typical = Yes), then copy the Summary sheet's 'Row to copy' and "
+         "Paste Special → Values into a Library row from column H. Fill in location, type, period, emissions and percentile.", f(10, color=INK2)),
+        ("5. Paste your observed year back into Hourly (Typical = No). On Compare, type the location to compare with (e.g. Zone 7) "
+         "in B6. If Compare warns that thresholds differ, run the UseLibraryThresholds macro. Compare and Dashboard then show "
+         "the closest files.", f()),
         ("", None),
         ("Important: fix the thresholds before building the library", f(11, True)),
-        ("SWCDH and TWCDH depend on regional thresholds. Every file in a comparison must use the same values. Load the location's "
-         "current-climate TRY first, copy Settings rows 24–25 (derived values) into the override cells in rows 22–23, then keep them "
-         "fixed while you add the other files and your observed years.", f()),
+        ("SWCDH and TWCDH depend on regional thresholds, and every file in a comparison must use the same values. The folder import "
+         "does this for you: with Settings → 'Thresholds for imported files' = Each location's TRY, it derives each location's values "
+         "from its earliest-period TRY (else DSY1) and stores them in Library columns Z–AA. By hand: load the location's current-climate "
+         "TRY first, copy Settings rows 24–25 into the overrides in rows 22–23, and keep them fixed while you add the other files.", f()),
         ("", None),
         ("Definitions", f(11, True)),
         ("Running mean Trm = (1−α)(Tod-1 + α·Tod-2 + α²·Tod-3 + …), evaluated recursively with α = 0.8 and seeded with the BS EN 15251 "
          "7-day approximation. Days with fewer than 18 hours of data have no daily mean.", f()),
         ("Comfort temperature Tcomf = 0.33·Trm + 18.8 (CIBSE TM52, BS EN 15251). Tmax = Tcomf + 3 K for Category II.", f()),
-        ("WCDH = Σ max(0, T − Tcomf)² over the season's hours (Eames 2016, the metric behind the CIBSE 2016 probabilistic DSYs).", f()),
-        ("TWCDH = Σ max(0, T − (Tcomf + regional offset))². SWCDH = Σ max(0, T − regional 93rd-centile temperature)².", f()),
+        ("WCDH = Σ max(0, T − Tcomf)² over the season's hours: the adaptive-comfort form of the metric (Eames 2016).", f()),
+        ("TWCDH = Σ max(0, T − (Tcomf + regional offset))². SWCDH = Σ max(0, T − regional 93rd-centile temperature)². CIBSE selects "
+         "DSY1 as the 1-in-7 year ranked by SWCDH; DSY2 is the year with the most intense heat event and DSY3 the longest.", f()),
         ("Warm event: a run of consecutive in-season days with daily WCDH above the Settings threshold. Severity = its total WCDH; "
          "intensity = its peak daily WCDH. DSY2 years have short intense events; DSY3 years have long ones.", f()),
         ("TM52-style indicators are computed on outdoor air: hours with rounded ΔT ≥ 1 K above Tmax, the largest daily weighted "
@@ -733,7 +780,7 @@ def build():
          "year; distance = weighted RMS difference; score = 100·e^(−distance).", f()),
         ("", None),
         ("Limitations compared with the web app", f(11, True)),
-        ("One weather file at a time. No automatic downloads: paste data from Open-Meteo, Meteostat, NOAA ISD, MIDAS Open or the web "
+        ("One weather file analysed at a time (the folder import loops over files for you). No automatic downloads: paste data from Open-Meteo, Meteostat, NOAA ISD, MIDAS Open or the web "
          "app's CSV export. Daily gaps aren't interpolated. The charts always show 1 April – 30 September. The season must not "
          "wrap past 31 December.", f()),
         ("For typical years, 1 January's running mean is seeded from the last 7 days of December; the web app spins up over 30 days. "
@@ -744,7 +791,8 @@ def build():
          "Met Office data. Replace both with real data.", f(10, color="C00000")),
         ("", None),
         ("References", f(11, True)),
-        ("CIBSE TM52 (2013); CIBSE TM59 (2017); CIBSE TM49 (2014); BS EN 15251:2007 / BS EN 16798-1:2019; "
+        ("CIBSE TM52 (2013); CIBSE TM59 (2017, updated 2026); CIBSE TM49 (2014); CIBSE Weather Data 2025 technical briefing; "
+         "BS EN 15251:2007 / BS EN 16798-1:2019; "
          "Eames, M. (2016) BSERT 37(5); Liu, Kershaw, Eames & Coley (2016) Building and Environment 105.", f()),
     ]
     for i, (text, font) in enumerate(lines, start=2):
@@ -762,6 +810,21 @@ def build():
     # Tab colours
     for ws, color in ((readme, "898781"), (dash, BLUE), (st, "EDA100"), (hr, "EDA100"), (lb, "EDA100"), (cp, BLUE)):
         ws.sheet_properties.tabColor = color
+
+    # ---------------------------------------------------------- Import log (written by the macro)
+    title(lg, "Import log", "Written by the ImportWeatherFolder macro: one line per file found.")
+    header_row(lg, 3, ["File", "Result", "Location", "File type", "Period", "Emissions", "Percentile", "Library row", "Notes"])
+    for c_, w in zip("ABCDEFGHI", (70, 16, 18, 9, 9, 10, 10, 10, 70)):
+        lg.column_dimensions[c_].width = w
+    lg.freeze_panes = "A4"
+    name(wb, "log_start", "'Import log'!$A$4")
+    name(wb, "hourly_input", f"Hourly!$A${H0}:$E${H1}")
+    name(wb, "summary_values", f"Summary!$B$5:$B${4 + len(METRICS)}")
+
+    # Code names, so the VBA project's document modules bind to the workbook and its sheets.
+    wb.code_name = "ThisWorkbook"
+    for i, ws in enumerate(wb.worksheets, start=1):
+        ws.sheet_properties.codeName = f"Sheet{i}"
 
     wb.active = 1
     wb.calculation.fullCalcOnLoad = True

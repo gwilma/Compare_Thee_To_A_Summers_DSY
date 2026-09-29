@@ -139,6 +139,10 @@ def test_midas_fetch_requires_token(monkeypatch):
         ("GB_Edinburgh_TRY.epw", ("Edinburgh", "TRY", "Baseline", None, None)),
         ("LondonLWC_DSY2.epw", ("London (Weather Centre)", "DSY2", "Baseline", None, None)),
         ("Birmingham_DSY_2020_Low_10pc.epw", ("Birmingham", "DSY1", "2020s", "Low", 10)),
+        ("Z1_DSY1_2020s_HIGH10_CIBSE_v1.1.epw", ("Zone 1", "DSY1", "2020s", "High", 10)),
+        ("Z12_TRY_2030s_HIGH50_CIBSE_v1.1.epw", ("Zone 12", "TRY", "2030s", "High", 50)),
+        ("Zone 28_DSY3_2080s_LOW90_CIBSE_v1.1.epw", ("Zone 28", "DSY3", "2080s", "Low", 90)),
+        ("Glasgow_DSY2_2050High50.epw", ("Glasgow", "DSY2", "2050s", "High", 50)),
     ],
 )
 def test_reference_name_parsing(name, expected):

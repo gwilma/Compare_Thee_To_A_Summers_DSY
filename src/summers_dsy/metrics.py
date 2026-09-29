@@ -188,9 +188,9 @@ class SeasonAnalysis:
 
 #: Metric keys with display label, unit and a short description.
 METRIC_INFO: dict[str, tuple[str, str, str]] = {
-    "wcdh": ("WCDH", "K²h", "Weighted cooling degree hours above Tcomf (Eames 2016)"),
+    "wcdh": ("WCDH", "K²h", "Weighted cooling degree hours above the adaptive comfort temperature (Eames 2016)"),
     "twcdh": ("TWCDH", "K²h", "Threshold WCDH above Tcomf + regional offset"),
-    "swcdh": ("SWCDH", "K²h", "Static WCDH above the regional 93rd-centile temperature"),
+    "swcdh": ("SWCDH", "K²h", "Static WCDH above the regional 93rd-centile temperature; CIBSE ranks DSY1 (1-in-7 year) by this"),
     "peak_daily_wcdh": ("Peak daily WCDH", "K²h", "Intensity of the most intense day"),
     "max_event_severity": ("Max event severity", "K²h", "WCDH total of the most severe warm event"),
     "max_event_duration": ("Longest warm event", "days", "Longest run of consecutive days with WCDH > 0"),
