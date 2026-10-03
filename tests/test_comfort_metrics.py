@@ -99,3 +99,48 @@ def test_intense_vs_long_spells_are_distinguished():
     long = analyse(synthetic_series("dsy3", spells=[WarmSpell(210, 24, 5)], seed=1), AnalysisConfig(static_threshold=24, twcdh_offset=0))
     assert intense.metrics["peak_daily_wcdh"] > long.metrics["peak_daily_wcdh"]
     assert long.metrics["max_event_duration"] > intense.metrics["max_event_duration"]
+
+
+def test_nightly_means_window_and_metrics():
+    from summers_dsy.metrics import nightly_means
+
+    idx = pd.date_range("2019-01-01", "2019-12-31 23:00", freq="h")
+    t = pd.Series(15.0, index=idx)
+    # The night starting on 24 July (22:00 on the 24th to 07:00 on the 25th) is warm: 29 degC.
+    warm = (idx >= "2019-07-24 22:00") & (idx < "2019-07-25 07:00")
+    t[warm] = 29.0
+    t[idx == pd.Timestamp("2019-07-25 07:00")] = 40.0  # 07:00 is outside the night
+    nights = nightly_means(t)
+    assert nights.loc["2019-07-24", "night_hours"] == 9
+    assert nights.loc["2019-07-24", "night_mean"] == pytest.approx(29.0)
+    assert nights.loc["2019-07-25", "night_mean"] == pytest.approx(15.0)
+
+    res = analyse(WeatherSeries("n", t.to_frame("dry_bulb")), AnalysisConfig(static_threshold=25, twcdh_offset=0))
+    assert res.metrics["night_max_mean"] == pytest.approx(29.0)
+    assert res.metrics["nights_above"] == 1
+    res20 = analyse(WeatherSeries("n", t.to_frame("dry_bulb")),
+                    AnalysisConfig(static_threshold=25, twcdh_offset=0, night_threshold=30))
+    assert res20.metrics["nights_above"] == 0
+
+
+def test_night_needs_enough_hours():
+    from summers_dsy.metrics import nightly_means
+
+    idx = pd.date_range("2019-07-01 22:00", periods=9, freq="h")
+    t = pd.Series([20.0] * 6 + [np.nan] * 3, index=idx)
+    assert np.isnan(nightly_means(t.dropna()).loc["2019-07-01", "night_mean"])
+
+
+def test_seasonal_means_use_the_analysis_year_only():
+    # A previous-December spin-up at 100 degC must not leak into this year's winter mean.
+    idx = pd.date_range("2018-12-01", "2019-12-31 23:00", freq="h")
+    t = pd.Series(np.where(idx.month.isin([12, 1, 2]), 2.0, 10.0), index=idx)
+    t[idx.year == 2018] = 100.0
+    t[(idx.month.isin([6, 7, 8])) & (idx.hour == 14)] = 25.0  # daily maximum in summer
+    res = analyse(WeatherSeries("s", t.to_frame("dry_bulb")), AnalysisConfig(static_threshold=25, twcdh_offset=0))
+    m = res.metrics
+    assert m["mean_t_djf"] == pytest.approx(2.0)
+    assert m["mean_t_mam"] == pytest.approx(10.0)
+    assert m["mean_t_son"] == pytest.approx(10.0)
+    assert m["mean_t_jja"] == pytest.approx((23 * 10 + 25) / 24)
+    assert m["jja_mean_daily_max"] == pytest.approx(25.0)

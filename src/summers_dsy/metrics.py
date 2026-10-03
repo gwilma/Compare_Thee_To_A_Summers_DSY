@@ -61,6 +61,14 @@ class AnalysisConfig:
     hot_day_threshold: float = 28.0
     #: Daily minimum threshold for counting warm nights (degC).
     warm_night_threshold: float = 16.0
+    #: Night-time window (hour-beginning, file time). TM59 treats 22:00-07:00 as bedroom night-time.
+    night_start_hour: int = 22
+    night_end_hour: int = 7
+    #: Threshold for the nightly mean (degC). TM59:2026 limits the mean bedroom temperature at night to
+    #: below 27 degC, with no more than four exceedance nights between May and September.
+    night_threshold: float = 27.0
+    #: Nights a night needs at least this many valid hours to have a mean.
+    night_min_hours: int = 7
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -126,6 +134,29 @@ def hourly_comfort(series: WeatherSeries, config: AnalysisConfig | None = None, 
         },
         index=idx,
     )
+
+
+def nightly_means(temps: pd.Series, start_hour: int = 22, end_hour: int = 7, min_hours: int = 7) -> pd.DataFrame:
+    """Mean temperature of each night, indexed by the date of the evening the night starts.
+
+    A night runs from ``start_hour`` on day d to ``end_hour`` on day d+1 (hours are hour-beginning,
+    so 22:00-07:00 is the nine hours 22, 23, 0, ..., 6). Nights with fewer than ``min_hours`` valid
+    hours have no mean.
+    """
+    hours = temps.index.hour
+    if start_hour > end_hour:
+        evening, morning = hours >= start_hour, hours < end_hour
+        night_date = temps.index.normalize() - pd.to_timedelta(np.where(morning, 1, 0), unit="D")
+        in_night = evening | morning
+    else:  # a window that does not cross midnight
+        in_night = (hours >= start_hour) & (hours < end_hour)
+        night_date = temps.index.normalize()
+    t = temps[in_night]
+    grouped = t.groupby(night_date[in_night])
+    out = pd.DataFrame({"night_hours": grouped.count(), "night_mean": grouped.mean()})
+    out.loc[out["night_hours"] < min_hours, "night_mean"] = np.nan
+    out.index.name = None
+    return out
 
 
 @dataclass
@@ -206,7 +237,22 @@ METRIC_INFO: dict[str, tuple[str, str, str]] = {
     "hot_days": ("Hot days", "days", "Days with maximum at or above the hot-day threshold"),
     "warm_nights": ("Warm nights", "nights", "Days with minimum at or above the warm-night threshold"),
     "cdh_22": ("CDH (base 22 °C)", "K·h", "Unweighted cooling degree hours above 22 °C"),
+    "night_max_mean": ("Warmest night (mean)", "°C",
+                       "Highest night-time (22:00–07:00) mean outdoor temperature in the season"),
+    "nights_above": ("Nights ≥ threshold", "nights",
+                     "Nights whose mean outdoor temperature (22:00–07:00) is at or above the night threshold, 27 °C by "
+                     "default (TM59:2026 bedroom criterion analogue: no more than 4 such nights)"),
+    "mean_t_djf": ("Winter mean (DJF)", "°C",
+                   "Mean air temperature, December–February of the analysis year (energy demand: heating)"),
+    "mean_t_mam": ("Spring mean (MAM)", "°C", "Mean air temperature, March–May (energy demand)"),
+    "mean_t_jja": ("Summer mean (JJA)", "°C", "Mean air temperature, June–August (energy demand: cooling)"),
+    "mean_t_son": ("Autumn mean (SON)", "°C", "Mean air temperature, September–November (energy demand)"),
+    "jja_mean_daily_max": ("Summer mean daily max (JJA)", "°C",
+                           "Mean of daily maximum temperatures, June–August (overheating risk)"),
 }
+
+#: Meteorological seasons used for the seasonal means (months; DJF uses the analysis year's own December).
+MET_SEASONS = {"djf": (12, 1, 2), "mam": (3, 4, 5), "jja": (6, 7, 8), "son": (9, 10, 11)}
 
 DEFAULT_COMPARISON_METRICS = [
     "wcdh",
@@ -237,6 +283,8 @@ def analyse(series: WeatherSeries, config: AnalysisConfig | None = None) -> Seas
 
     for col in ("wcdh", "twcdh", "swcdh"):
         daily[f"{col}_daily"] = hourly_all[col].resample("D").sum(min_count=1)
+    nights = nightly_means(t, config.night_start_hour, config.night_end_hour, config.night_min_hours)
+    daily = daily.join(nights)
 
     in_season = season_mask(hourly_all.index, config.season_start, config.season_end)
     hourly = hourly_all[in_season]
@@ -251,6 +299,13 @@ def analyse(series: WeatherSeries, config: AnalysisConfig | None = None) -> Seas
     daily_we = exceed.resample("D").sum()
 
     apr_sep = season_mask(hourly_all.index, *TM49_SEASON)
+    # Seasonal means use the analysis year only (an observed slice may start with the previous December).
+    year = hourly_all.index.max().year
+    this_year = hourly_all[hourly_all.index.year == year]
+    season_means = {f"mean_t_{k}": float(this_year.loc[this_year.index.month.isin(m), "dry_bulb"].mean())
+                    for k, m in MET_SEASONS.items()}
+    days_this_year = daily[daily.index.year == year]
+    jja_days = days_this_year[days_this_year.index.month.isin(MET_SEASONS["jja"])]
     metrics = {
         "wcdh": float(hourly["wcdh"].sum()),
         "twcdh": float(hourly["twcdh"].sum()),
@@ -270,6 +325,10 @@ def analyse(series: WeatherSeries, config: AnalysisConfig | None = None) -> Seas
         "hot_days": int((sd["t_max"] >= config.hot_day_threshold).sum()),
         "warm_nights": int((sd["t_min"] >= config.warm_night_threshold).sum()),
         "cdh_22": float((hourly["dry_bulb"] - 22).clip(lower=0).sum()),
+        "night_max_mean": float(sd["night_mean"].max()),
+        "nights_above": int((sd["night_mean"] >= config.night_threshold).sum()),
+        **season_means,
+        "jja_mean_daily_max": float(jja_days["t_max"].mean()),
         "season_coverage": float(hourly["dry_bulb"].notna().mean()),
     }
     return SeasonAnalysis(

@@ -30,7 +30,7 @@ def main(path: str) -> int:
     wb = load_workbook(path, data_only=True, read_only=True)
     st, hr, sm, lb, cp, dy = (wb[n] for n in ("Settings", "Hourly", "Summary", "Library", "Compare", "Daily"))
 
-    s = {r[0].value: r[1].value for r in st.iter_rows(min_row=4, max_row=40, max_col=2) if r[0].value}
+    s = {r[0].value: r[1].value for r in st.iter_rows(min_row=4, max_row=60, max_col=2) if r[0].value}
     swcdh, twcdh = s["SWCDH threshold used (°C)"], s["TWCDH offset used (K)"]
     typical = s["Typical/design year file? (wrap running mean)"] == "Yes"
 
@@ -40,7 +40,10 @@ def main(path: str) -> int:
     idx = pd.to_datetime({"year": year, "month": df["month"], "day": df["day"], "hour": df["hour"] - 1})
     series = WeatherSeries("wb", pd.DataFrame({"dry_bulb": df["t"].to_numpy()}, index=idx), meta={"typical_year": typical})
     cfg = AnalysisConfig(static_threshold=swcdh, twcdh_offset=twcdh,
-                         hot_day_threshold=s["Hot day: daily max ≥ (°C)"], warm_night_threshold=s["Warm night: daily min ≥ (°C)"])
+                         hot_day_threshold=s["Hot day: daily max ≥ (°C)"], warm_night_threshold=s["Warm night: daily min ≥ (°C)"],
+                         night_start_hour=int(s["Night starts (hour, 0–23)"]), night_end_hour=int(s["Night ends (hour, 0–23)"]),
+                         night_threshold=s["Night mean threshold (°C)"],
+                         night_min_hours=int(s["Minimum valid hours for a night mean"]))
     py = analyse(series, cfg)
 
     failures = 0

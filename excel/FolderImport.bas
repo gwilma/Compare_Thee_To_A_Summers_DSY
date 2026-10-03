@@ -17,11 +17,9 @@ Option Explicit
 ' the SWCDH threshold and TWCDH offset for every location are derived from that location's
 ' earliest-period TRY (else DSY1), so all files of a location share the same values.
 
-Private Const N_METRICS As Long = 18
-Private Const COL_METRICS As Long = 8      ' Library column H
-Private Const COL_SWCDH As Long = 26       ' Library column Z
-Private Const COL_TWCDH As Long = 27       ' Library column AA
-Private Const COL_SOURCE As Long = 28      ' Library column AB
+Private Const COL_METRICS As Long = 8      ' Library column H: the metrics start here, in Summary order.
+' The metric count comes from the summary_values range, so adding a metric to the workbook needs no
+' change here. The stored thresholds and source path follow the metrics.
 Private Const MAX_HOURS As Long = 10000
 Private Const MIN_HOURS As Long = 4000     ' fewer than this cannot cover a season plus spin-up
 
@@ -59,12 +57,12 @@ Private Sub ApplyLibraryThresholds()
     tbl = NR("lib_table").Value
     For r = 1 To UBound(tbl, 1)
         If CStr(tbl(r, 1)) = "1" And (loc = "" Or LCase$(CStr(tbl(r, 2))) = LCase$(loc)) Then
-            If IsNumeric(tbl(r, COL_SWCDH)) And Not IsEmpty(tbl(r, COL_SWCDH)) And Not IsEmpty(tbl(r, COL_TWCDH)) Then
-                NR("swcdh_override").Value = tbl(r, COL_SWCDH)
-                NR("twcdh_override").Value = tbl(r, COL_TWCDH)
+            If IsNumeric(tbl(r, ColSwcdh())) And Not IsEmpty(tbl(r, ColSwcdh())) And Not IsEmpty(tbl(r, ColTwcdh())) Then
+                NR("swcdh_override").Value = tbl(r, ColSwcdh())
+                NR("twcdh_override").Value = tbl(r, ColTwcdh())
                 Application.Calculate
                 Say "Settings now use the thresholds stored for " & CStr(tbl(r, 2)) & ": SWCDH " & _
-                    Format$(tbl(r, COL_SWCDH), "0.00") & " °C, TWCDH offset " & Format$(tbl(r, COL_TWCDH), "0.00") & " K."
+                    Format$(tbl(r, ColSwcdh()), "0.00") & " °C, TWCDH offset " & Format$(tbl(r, ColTwcdh()), "0.00") & " K."
                 Exit Sub
             End If
         End If
@@ -185,7 +183,7 @@ Private Function ImportOne(info As Variant) As Boolean
     End If
     Application.Calculate
     vals = NR("summary_values").Value
-    For k = 1 To N_METRICS
+    For k = 1 To NMetrics()
         If Not IsNumeric(vals(k, 1)) Or IsBlank(vals(k, 1)) Then
             LogLine CStr(info(0)), "Skipped", CStr(info(1)), CStr(info(2)), CStr(info(3)), CStr(info(4)), CStr(info(5)), "", _
                 "Metrics could not be calculated (is a full season of data present?)"
@@ -201,21 +199,21 @@ Private Function ImportOne(info As Variant) As Boolean
     End If
 
     Set libRange = NR("lib_table")
-    ReDim outRow(1 To 1, 1 To COL_SOURCE)
+    ReDim outRow(1 To 1, 1 To ColSource())
     outRow(1, 1) = 1
     outRow(1, 2) = info(1)
     outRow(1, 3) = info(2)
     outRow(1, 4) = info(3)
     outRow(1, 5) = BlankIfEmpty(info(4))
     If CStr(info(5)) = "" Then outRow(1, 6) = Empty Else outRow(1, 6) = CLng(info(5))
-    For k = 1 To N_METRICS
+    For k = 1 To NMetrics()
         outRow(1, COL_METRICS + k - 1) = vals(k, 1)
     Next k
-    outRow(1, COL_SWCDH) = NR("swcdh_thr").Value
-    outRow(1, COL_TWCDH) = NR("twcdh_off").Value
-    outRow(1, COL_SOURCE) = CStr(info(0))
+    outRow(1, ColSwcdh()) = NR("swcdh_thr").Value
+    outRow(1, ColTwcdh()) = NR("twcdh_off").Value
+    outRow(1, ColSource()) = CStr(info(0))
     libRange.Cells(row, 1).Resize(1, 6).Value = SliceRow(outRow, 1, 6)
-    libRange.Cells(row, COL_METRICS).Resize(1, COL_SOURCE - COL_METRICS + 1).Value = SliceRow(outRow, COL_METRICS, COL_SOURCE)
+    libRange.Cells(row, COL_METRICS).Resize(1, ColSource() - COL_METRICS + 1).Value = SliceRow(outRow, COL_METRICS, ColSource())
     LogLine CStr(info(0)), "Imported", CStr(info(1)), CStr(info(2)), CStr(info(3)), CStr(info(4)), CStr(info(5)), _
         CStr(libRange.Cells(row, 1).Row), ""
     ImportOne = True
@@ -655,6 +653,22 @@ Private Sub LogLine(ByVal path As String, ByVal result As String, ByVal loc As S
 End Sub
 
 ' ------------------------------------------------------------------ helpers
+
+Private Function NMetrics() As Long
+    NMetrics = NR("summary_values").Rows.Count
+End Function
+
+Private Function ColSwcdh() As Long
+    ColSwcdh = COL_METRICS + NMetrics()
+End Function
+
+Private Function ColTwcdh() As Long
+    ColTwcdh = ColSwcdh() + 1
+End Function
+
+Private Function ColSource() As Long
+    ColSource = ColSwcdh() + 2
+End Function
 
 Private Function NR(ByVal nm As String) As Range
     Set NR = ThisWorkbook.Names(nm).RefersToRange

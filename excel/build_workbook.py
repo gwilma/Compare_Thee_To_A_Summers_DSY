@@ -180,6 +180,13 @@ def build():
          "'Each location's TRY': the macro derives the SWCDH threshold and TWCDH offset for each location from its "
          "earliest-period TRY (else DSY1) and uses them for all of that location's files. 'Settings overrides': "
          "every file uses rows 22–23.", True),
+        (44, "Night starts (hour, 0–23)", 22, "night_start",
+         "TM59 treats 22:00–07:00 as bedroom night-time. Hours are file time; the window must cross midnight.", True),
+        (45, "Night ends (hour, 0–23)", 7, "night_end", "", True),
+        (46, "Night mean threshold (°C)", 27, "night_mean_thr",
+         "TM59:2026: the mean bedroom temperature at night must stay below 27 °C, with no more than 4 exceedance nights "
+         "May–September. Applied here to outdoor air; a lower value is often more telling for UK nights.", True),
+        (47, "Minimum valid hours for a night mean", 7, "night_min_hours", "", True),
     ]
     for r, label, value, nm, note, is_input in settings:
         st.cell(row=r, column=1, value=label).font = f()
@@ -219,7 +226,7 @@ def build():
         ("Date-time", 16), ("Date", 11), ("In season", 8), ("Day index", 8), ("Tcomf (°C)", 9), ("Tmax (°C)", 9),
         ("WCDH (K²h)", 10), ("TWCDH (K²h)", 10), ("SWCDH (K²h)", 10), ("ΔT above Tmax, rounded (K)", 11),
         ("Weighted exceedance (K·h)", 11), ("CDH above 22 °C (K·h)", 11), ("In-season T (°C)", 10),
-        ("In-season T − Tcomf (K)", 11), ("Month no.", 7),
+        ("In-season T − Tcomf (K)", 11), ("Month no.", 7), ("Night of (date)", 11), ("Year no.", 7),
     ]
     header_row(hr, 1, [c[0] for c in hr_cols])
     for i, (_, w) in enumerate(hr_cols, start=1):
@@ -258,6 +265,8 @@ def build():
         hr[f"R{r}"] = f'=IF(H{r}=1,E{r},"")'
         hr[f"S{r}"] = f'=IF(AND(H{r}=1,J{r}<>""),E{r}-J{r},"")'
         hr[f"T{r}"] = f'=IF(G{r}="","",MONTH(G{r}))'
+        hr[f"U{r}"] = (f'=IF(G{r}="","",IF(HOUR(F{r})>=night_start,G{r},IF(HOUR(F{r})<night_end,G{r}-1,"")))')
+        hr[f"V{r}"] = f'=IF(G{r}="","",YEAR(G{r}))'
     for c_idx in range(1, 6):
         for r in range(H0, H1 + 1):
             cell = hr.cell(row=r, column=c_idx)
@@ -278,6 +287,7 @@ def build():
         ("Hot day", 6), ("Warm night", 7), ("", 2),
         ("Tod-1", 7), ("Tod-2", 7), ("Tod-3", 7), ("Tod-4", 7), ("Tod-5", 7), ("Tod-6", 7), ("Tod-7", 7),
         ("", 2), ("First hourly row", 8), ("Last hourly row", 8),
+        ("Night hours", 7), ("Night mean (°C)", 9), ("Night ≥ threshold", 8), ("Month no.", 7), ("Year no.", 7),
     ]
     header_row(dy, 1, [c[0] for c in dy_cols])
     for i, (_, w) in enumerate(dy_cols, start=1):
@@ -298,6 +308,14 @@ def build():
         day = lambda c_: f"INDEX({HR(c_)},AF{r}):INDEX({HR(c_)},AG{r})"  # noqa: E731
         dy[f"D{r}"] = f'=IF(B{r}="","",IF(C{r}>=18,AVERAGE({day("E")}),""))'
         dy[f"E{r}"] = f'=IF(OR(B{r}="",N(C{r})=0),"",MIN({day("E")}))'
+        # The night starting this evening ends next morning: search this day's and the next day's rows.
+        night = lambda c_: f"INDEX({HR(c_)},AF{r}):INDEX({HR(c_)},MAX(AG{r},N(AG{r + 1})))"  # noqa: E731
+        dy[f"AH{r}"] = f'=IF(OR(B{r}="",N(AF{r})=0),"",COUNTIF({night("U")},B{r}))'
+        dy[f"AI{r}"] = f'=IF(N(AH{r})<night_min_hours,"",AVERAGEIFS({night("E")},{night("U")},B{r}))'
+        dy[f"AJ{r}"] = f'=IF(AND(L{r}=1,ISNUMBER(AI{r})),IF(AI{r}>=night_mean_thr,1,0),0)'
+        dy[f"AK{r}"] = f'=IF(B{r}="","",MONTH(B{r}))'
+        dy[f"AL{r}"] = f'=IF(B{r}="","",YEAR(B{r}))'
+        dy[f"AI{r}"].number_format = "0.00"
         dy[f"F{r}"] = f'=IF(OR(B{r}="",N(C{r})=0),"",MAX({day("E")}))'
         dy[f"G{r}"] = f'=IF(E{r}="","",F{r}-E{r})'
         dy[f"H{r}"] = f'=IF(B{r}="","",IF(COUNT(X{r}:AD{r})=7,SUMPRODUCT(X{r}:AD{r},rm_weights)/SUM(rm_weights),""))'
@@ -350,6 +368,16 @@ def build():
         "hot_days": f"=SUM({DY('U')})",
         "warm_nights": f"=SUM({DY('V')})",
         "cdh_22": f"=SUMIFS({HR('Q')},{HR('H')},1)",
+        "night_max_mean": f"=_xlfn.MAXIFS({DY('AI')},{DY('L')},1)",
+        "nights_above": f"=SUM({DY('AJ')})",
+        # Seasonal means use the analysis year only (the data may start with the previous December).
+        "mean_t_djf": (f"=(SUMIFS({HR('E')},{HR('T')},12,{HR('V')},analysis_year)+SUMIFS({HR('E')},{HR('T')},1,{HR('V')},analysis_year)"
+                       f"+SUMIFS({HR('E')},{HR('T')},2,{HR('V')},analysis_year))/(COUNTIFS({HR('T')},12,{HR('V')},analysis_year)"
+                       f"+COUNTIFS({HR('T')},1,{HR('V')},analysis_year)+COUNTIFS({HR('T')},2,{HR('V')},analysis_year))"),
+        "mean_t_mam": f'=AVERAGEIFS({HR("E")},{HR("T")},">=3",{HR("T")},"<=5",{HR("V")},analysis_year)',
+        "mean_t_jja": f'=AVERAGEIFS({HR("E")},{HR("T")},">=6",{HR("T")},"<=8",{HR("V")},analysis_year)',
+        "mean_t_son": f'=AVERAGEIFS({HR("E")},{HR("T")},">=9",{HR("T")},"<=11",{HR("V")},analysis_year)',
+        "jja_mean_daily_max": f'=AVERAGEIFS({DY("F")},{DY("AK")},">=6",{DY("AK")},"<=8",{DY("AL")},analysis_year)',
     }
     title(sm, "Summary: overheating metrics for the season", None)
     sm["A2"] = '="Site: "&site_name&" · season "&TEXT(DATE(analysis_year,s_month,s_day),"d mmm")&" – "&TEXT(DATE(analysis_year,e_month,e_day),"d mmm yyyy")'
@@ -641,7 +669,9 @@ def build():
     tiles = [("WCDH (K²h)", summary_row["wcdh"], "#,##0"), ("Peak temperature (°C)", summary_row["t_max"], "0.0"),
              ("Longest warm event (days)", summary_row["max_event_duration"], "0"),
              ("Hours above Tmax", summary_row["hours_above_upper"], "#,##0"),
-             ("Hot days", summary_row["hot_days"], "0")]
+             ("Hot days", summary_row["hot_days"], "0"),
+             ("Nights ≥ night threshold", summary_row["nights_above"], "0"),
+             ("Summer mean daily max (°C)", summary_row["jja_mean_daily_max"], "0.0")]
     for i, (label, ref, fmt) in enumerate(tiles):
         c0 = 2 + i * 2
         lab_c = dash.cell(row=8, column=c0, value=label)
@@ -776,6 +806,11 @@ def build():
          "intensity = its peak daily WCDH. DSY2 years have short intense events; DSY3 years have long ones.", f()),
         ("TM52-style indicators are computed on outdoor air: hours with rounded ΔT ≥ 1 K above Tmax, the largest daily weighted "
          "exceedance Σ ΔT, and the largest ΔT. They indicate climate severity; they are not building compliance checks.", f()),
+        ("Night-time (TM59:2026 analogue): each night runs from 22:00 to 07:00 (Settings rows 44–47) and is labelled by the "
+         "evening it starts. 'Warmest night' is the highest nightly mean outdoor temperature in the season. 'Nights ≥ night "
+         "threshold' counts nights with a mean at or above 27 °C by default; TM59:2026 allows bedrooms no more than 4 such nights.", f()),
+        ("Seasonal climate: mean air temperature for winter (Dec–Feb, using the analysis year's own December), spring, summer and "
+         "autumn, as a guide to energy demand; and the summer (Jun–Aug) mean daily maximum, as a guide to overheating risk.", f()),
         ("Similarity: skewed metrics use ln(1+x); each metric is divided by its spread across the included files plus the observed "
          "year; distance = weighted RMS difference; score = 100·e^(−distance).", f()),
         ("", None),
@@ -805,7 +840,7 @@ def build():
 
     # Shade calculated cells lightly on the calculation sheets.
     for ws in (hr,):
-        ws.conditional_formatting.add(f"F{H0}:T{H1}", FormulaRule(formula=['$E2=""'], font=Font(color="BFBFBF")))
+        ws.conditional_formatting.add(f"F{H0}:V{H1}", FormulaRule(formula=['$E2=""'], font=Font(color="BFBFBF")))
 
     # Tab colours
     for ws, color in ((readme, "898781"), (dash, BLUE), (st, "EDA100"), (hr, "EDA100"), (lb, "EDA100"), (cp, BLUE)):

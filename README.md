@@ -66,6 +66,8 @@ checks every imported row.
 | SWCDH | `Σ max(0, T − T_static)²`, where `T_static` is the regional 93rd-centile temperature. CIBSE ranks DSY1 (a 1-in-7 year) by SWCDH; DSY2 has the most intense heat event and DSY3 the longest. |
 | Warm events | Runs of days with daily WCDH > 0, characterised by duration, severity (total WCDH) and intensity (peak daily WCDH). These separate DSY2 (short and intense) from DSY3 (long). |
 | TM52 analogues | Hours with ΔT ≥ 1 K above Tmax, the maximum daily weighted exceedance, and the maximum ΔT. All are computed on outdoor air. |
+| Night-time (TM59:2026 analogue) | Mean outdoor temperature of each night, 22:00–07:00 (file time), labelled by the evening it starts. Reported as the warmest nightly mean, and the number of nights with a mean at or above a threshold. The threshold defaults to TM59:2026's 27 °C bedroom limit, where bedrooms are allowed no more than 4 such nights from May to September. |
+| Seasonal climate | Mean air temperature for winter (Dec–Feb, using the analysis year's own December), spring, summer and autumn, for energy demand; and the summer (Jun–Aug) mean daily maximum, for overheating risk. |
 | Other | Peak temperature, mean daily max and min, season mean, April–September mean (the original TM49 ranking), hot days, warm nights and CDH above 22 °C. |
 
 The default season is the TM59 assessment period, 1 May to 30 September. TM49's April–September or a custom range can be chosen instead.

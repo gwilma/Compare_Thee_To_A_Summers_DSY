@@ -123,6 +123,14 @@ with st.sidebar:
         warm_night = st.number_input("Warm night: min ≥ (°C)", value=16.0, step=0.5)
         event_min = st.number_input("Warm-event day: daily WCDH > (K²h)", value=0.0, step=5.0)
 
+    with st.expander("Night-time (TM59:2026)", expanded=False):
+        st.caption("TM59:2026 limits the mean bedroom temperature at night to below 27 °C, with no more than 4 exceedance "
+                   "nights May–September. The same test applied to outdoor air shows how hard a season's nights are.")
+        night_thr = st.number_input("Night mean threshold (°C)", value=27.0, step=0.5)
+        c1, c2 = st.columns(2)
+        night_start = c1.number_input("Night starts (hour)", 0, 23, 22)
+        night_end = c2.number_input("Night ends (hour)", 0, 23, 7)
+
 CONFIG = AnalysisConfig(
     season_start=season[0],
     season_end=season[1],
@@ -135,6 +143,9 @@ CONFIG = AnalysisConfig(
     event_min_daily_wcdh=event_min,
     hot_day_threshold=hot_day,
     warm_night_threshold=warm_night,
+    night_threshold=night_thr,
+    night_start_hour=int(night_start),
+    night_end_hour=int(night_end),
 )
 CONFIG_KEY = tuple(sorted(asdict(CONFIG).items()))
 
@@ -292,13 +303,17 @@ with tab_obs:
                 st.session_state["selected_year"] = sel
                 a = analyses[sel]
                 m = a.metrics
-                cols = st.columns(4)
+                cols = st.columns(5)
                 rp = return_periods(table["wcdh"])
                 cols[0].metric("WCDH", fmt("wcdh", m["wcdh"]),
                                help=f"Rank {rp.loc[sel, 'rank']} of {len(rp)} years (≈ 1-in-{rp.loc[sel, 'return_period']:.1f})")
                 cols[1].metric("Peak temperature", fmt("t_max", m["t_max"]))
                 cols[2].metric("Longest warm event", fmt("max_event_duration", m["max_event_duration"]))
                 cols[3].metric(f"Hours > Tmax (Cat {CONFIG.category})", fmt("hours_above_upper", m["hours_above_upper"]))
+                cols[4].metric(f"Nights ≥ {CONFIG.night_threshold:g} °C", fmt("nights_above", m["nights_above"]),
+                               help=f"Nights ({CONFIG.night_start_hour:02d}:00–{CONFIG.night_end_hour:02d}:00) with a mean outdoor "
+                                    f"temperature at or above the threshold. Warmest night: {m['night_max_mean']:.1f} °C. "
+                                    "TM59:2026 allows bedrooms no more than 4 nights with a mean of 27 °C or more.")
     if a is not None:
         st.divider()
         st.markdown(f"##### {sel}: daily maximum and minimum, diurnal range and comfort temperature")
@@ -543,6 +558,19 @@ file in a comparison.
 An event is a run of consecutive days with daily WCDH above the event threshold (default 0).
 **Severity** is the event's total WCDH, **intensity** its peak daily WCDH, and **duration** its length in days.
 DSY1 is a moderately warm summer, DSY2 a year with a short, intense warm spell, and DSY3 a year with a long, sustained one.
+
+### TM59:2026 night-time indicator on outdoor air
+TM59:2026 requires the mean bedroom temperature at night to stay below 27 °C, with no more than four exceedance nights
+between May and September. Here the same test is applied to outdoor air. Each night runs from 22:00 to 07:00 (file time) and
+is labelled by the evening it starts. A night needs at least 7 valid hours to count. **Warmest night** is the highest nightly
+mean in the season, and **Nights ≥ threshold** counts nights with a mean at or above the threshold (27 °C by default; set it in
+the sidebar). Outdoor nights in the UK rarely reach 27 °C, so a lower threshold is often more telling. Neither is a building
+compliance check.
+
+### Seasonal climate (energy demand and overheating)
+**Seasonal mean air temperature** for each meteorological season, winter (December–February), spring, summer and
+autumn, is a guide to heating and cooling energy demand. **Summer mean daily maximum** (June–August) is a guide to
+overheating risk. Both use the analysis year only: winter takes that year's January, February and December.
 
 ### TM52-style indicators on outdoor air
 Hours with rounded $\Delta T = T - T_{max} \ge 1$ K, the largest daily weighted exceedance $\sum h_e \Delta T$, and the maximum $\Delta T$.

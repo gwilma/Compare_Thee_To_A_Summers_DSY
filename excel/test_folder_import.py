@@ -106,13 +106,15 @@ def main(xlsm: str | None = None) -> int:
         run_macro(xlsm, root, out)
 
         wb = load_workbook(out, data_only=True, read_only=True)
-        lib = [r for r in wb["Library"].iter_rows(min_row=6, max_col=28, values_only=True) if r[27]]
+        n = len(METRICS)
+        c_s, c_t, c_src = 7 + n, 8 + n, 9 + n  # 0-based: thresholds and source follow the metrics
+        lib = [r for r in wb["Library"].iter_rows(min_row=6, max_col=c_src + 1, values_only=True) if r[c_src]]
         log = [r for r in wb["Import log"].iter_rows(min_row=4, max_col=9, values_only=True) if r[1]]
         print("Import log:")
         for r in log:
             print("  ", (Path(r[0]).name if r[0] else ""), "|", r[1], "|", r[2], "|", r[8] or "")
 
-        by_file = {Path(r[27]).name: r for r in lib if r[27] != "synthetic demo data"}
+        by_file = {Path(r[c_src]).name: r for r in lib if r[c_src] != "synthetic demo data"}
         expected_files = {Path(rel).name: v for rel, v in FILES.items()}
         expected_files["heathrow_2019.epw"] = (None, None, None, 0, ("London (Heathrow)", "Other", "Baseline", None, None))
 
@@ -139,14 +141,14 @@ def main(xlsm: str | None = None) -> int:
                 series.meta["typical_year"] = False
             loc_thr = thr.get(meta[0])
             if loc_thr:
-                ok_thr = np.isclose(row[25], loc_thr[0]) and np.isclose(row[26], loc_thr[1])
+                ok_thr = np.isclose(row[c_s], loc_thr[0]) and np.isclose(row[c_t], loc_thr[1])
             else:
                 ok_thr = True  # no TRY for this location: Settings values are used
-            py = analyse(series, AnalysisConfig(static_threshold=row[25], twcdh_offset=row[26])).metrics
+            py = analyse(series, AnalysisConfig(static_threshold=row[c_s], twcdh_offset=row[c_t])).metrics
             bad = [k for j, k in enumerate(METRICS) if not np.isclose(row[7 + j], py[k], rtol=1e-6, atol=1e-6)]
             status = "OK" if ok_meta and ok_thr and not bad else "FAIL"
             failures += status == "FAIL"
-            print(f"{status:4s} {fname:44s} meta={got} thr=({row[25]:.3f},{row[26]:.3f})"
+            print(f"{status:4s} {fname:44s} meta={got} thr=({row[c_s]:.3f},{row[c_t]:.3f})"
                   + ("" if ok_meta else f" expected {meta}") + ("" if ok_thr else f" expected thr {loc_thr}")
                   + (f" metric mismatches: {bad}" if bad else ""))
 
@@ -165,7 +167,7 @@ def main(xlsm: str | None = None) -> int:
         if not before or after:
             print("FAIL threshold warning did not behave as expected")
             failures += 1
-        imported = [r for r in lib if r[27] != "synthetic demo data"]
+        imported = [r for r in lib if r[c_src] != "synthetic demo data"]
         if len(imported) != 10:
             print(f"FAIL expected 10 imported rows after two runs, found {len(imported)}")
             failures += 1
@@ -180,7 +182,7 @@ def main(xlsm: str | None = None) -> int:
             failures += 1
         print("Hourly data and Settings restored:", restored)
         failures += not restored
-        demo_rows = sum(1 for r in lib if r[27] == "synthetic demo data")
+        demo_rows = sum(1 for r in lib if r[c_src] == "synthetic demo data")
         print("Demo rows kept:", demo_rows)
 
     print("RESULT:", "PASS" if failures == 0 else f"FAIL ({failures})")
