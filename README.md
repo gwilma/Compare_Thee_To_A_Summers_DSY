@@ -21,6 +21,28 @@ pytest
 3. **③ Compare**: pick an observed year and a library location. The app ranks every reference file by similarity
    across the metrics and weights you choose.
 
+### Several years from Meteostat
+
+In the app, choose **Meteostat** as the data source. Then:
+1. Find a station by name or code, or list the stations nearest to a UK postcode (via postcodes.io) or coordinates.
+   A map shows them. The bundled list holds the 149 UK stations with hourly temperature observations; it can be
+   refreshed from Meteostat.
+2. Choose a range of years and download them. One file per year comes from `data.meteostat.net`, plus the
+   December before for the running mean.
+
+Model-forecast values that Meteostat uses to fill gaps are dropped unless you ask for them. Years with under 80%
+of the May–September hours are not counted.
+
+On **Compare**, the section *How many years exceeded each … reference file* gives statements such as
+"5 of the last 10 years (2016–2025) exceeded DSY1 · 2050s · High emissions · 50th percentile for Zone 7 on SWCDH".
+They use only the chosen location's files, on a metric you pick (default SWCDH).
+
+The Excel workbook does the same with the `DownloadMeteostatYears` macro (Meteostat, Years and Years vs DSY
+sheets). Downloading needs Excel for Windows. On a Mac, save the files into the download folder yourself.
+
+Station data © Meteostat (CC BY 4.0). Check meteostat.net's terms for the hourly data before commercial use.
+`python scripts/build_station_list.py stations.db` rebuilds the bundled station list.
+
 ### On an Ubuntu VPS
 
 `scripts/deploy_vps.sh` installs the app as a service behind nginx, with a password and optional HTTPS.
@@ -85,7 +107,7 @@ spread across the compared files, and the distance is the weighted RMS differenc
 | Source | Notes |
 |---|---|
 | Open-Meteo historical API (ERA5 / ERA5-Land) | Free with no key, 1940 onwards. Reanalysis smooths peaks and urban heat islands. |
-| Meteostat bulk hourly | Free with no key. Station data, partly gap-filled from models. |
+| Meteostat (data.meteostat.net) | Free with no key. Station observations (ISD, METAR and others). Model gap-fill is dropped by default. |
 | NOAA ISD global-hourly | Free with no key. Raw SYNOP/METAR reports; the report nearest each hour is used. |
 | Met Office MIDAS Open (CEDA) | The authoritative UK record. Needs a CEDA access token (`CEDA_TOKEN`); alternatively, upload the yearly BADC-CSV files. |
 

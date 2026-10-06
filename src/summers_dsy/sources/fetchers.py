@@ -8,8 +8,8 @@ Sources
 -------
 * **Open-Meteo historical API** (ERA5 / ERA5-Land reanalysis): free, no key,
   gridded, 1940 onwards. Reanalysis smooths peaks and urban heat islands.
-* **Meteostat bulk data**: free, no key; station observations assembled from
-  NOAA ISD and DWD, with gaps filled from models.
+* **Meteostat** (data.meteostat.net): free, no key; station observations assembled
+  from NOAA ISD, METAR and others, with model gap-fill that is dropped by default.
 * **NOAA Integrated Surface Database** (global-hourly CSV): free, no key; raw
   synoptic/METAR reports for WMO stations.
 * **Met Office MIDAS Open** (CEDA): the authoritative UK station record. Needs
@@ -33,7 +33,6 @@ from ..model import WeatherSeries, to_hourly
 from .http import SourceError, get_bytes
 
 OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
-METEOSTAT_URL = "https://bulk.meteostat.net/v2/hourly/{year}/{station}.csv.gz"
 NOAA_ISD_URL = "https://www.ncei.noaa.gov/data/global-hourly/access/{year}/{station}.csv"
 MIDAS_URL = (
     "https://dap.ceda.ac.uk/badc/ukmo-midas-open/data/uk-hourly-weather-obs/"
@@ -41,8 +40,6 @@ MIDAS_URL = (
     "midas-open_uk-hourly-weather-obs_dv-{version}_{county}_{src:05d}_{site}_qcv-1_{year}.csv"
 )
 MIDAS_DEFAULT_VERSION = "202407"
-
-METEOSTAT_COLUMNS = ["date", "hour", "temp", "dwpt", "rhum", "prcp", "snow", "wdir", "wspd", "wpgt", "pres", "tsun", "coco"]
 
 #: ISD quality codes treated as unusable (suspect or erroneous).
 ISD_BAD_QUALITY = set("2367")
@@ -100,24 +97,18 @@ def fetch_open_meteo(lat: float, lon: float, start_year: int, end_year: int, mod
 
 
 def parse_meteostat(raw: bytes) -> pd.Series:
-    """Parse one Meteostat bulk hourly file (gzipped CSV, no header)."""
-    text = gzip.decompress(raw).decode()
-    df = pd.read_csv(io.StringIO(text), header=None, names=METEOSTAT_COLUMNS)
-    idx = pd.to_datetime(df["date"]) + pd.to_timedelta(df["hour"], unit="h")
-    return pd.Series(pd.to_numeric(df["temp"], errors="coerce").to_numpy(), index=idx)
+    """Temperatures from one Meteostat hourly file (current or legacy format), all sources."""
+    from .meteostat import parse_hourly
+
+    return parse_hourly(raw)["temp"]
 
 
-def fetch_meteostat(station: str, start_year: int, end_year: int, name: str | None = None) -> WeatherSeries:
-    """Hourly temperature from Meteostat's bulk endpoint (one gzipped CSV per station-year)."""
-    years = _years(start_year, end_year)
-    parts = []
-    for year in years:
-        raw = get_bytes(METEOSTAT_URL.format(year=year, station=station), max_age_s=_max_age(year), not_found_ok=True)
-        if raw:
-            parts.append(parse_meteostat(raw))
-    if not parts:
-        raise SourceError(f"Meteostat has no hourly data for station {station} in {start_year}-{end_year}")
-    return _finish(name or f"Meteostat {station}", "meteostat", pd.concat(parts), {"station": station}, years)
+def fetch_meteostat(station: str, start_year: int, end_year: int, name: str | None = None,
+                    include_model: bool = False, progress=None) -> WeatherSeries:
+    """Hourly temperature from Meteostat (see :mod:`summers_dsy.sources.meteostat`)."""
+    from .meteostat import fetch_years
+
+    return fetch_years(station, start_year, end_year, include_model=include_model, name=name, progress=progress)
 
 
 # ------------------------------------------------------------------- NOAA ISD

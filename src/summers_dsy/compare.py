@@ -158,3 +158,51 @@ def compare(
     labels = {i: reference_label(s.meta) for i, s in references.items()}
     ranking.insert(0, "label", ranking.index.map(labels))
     return Comparison(tgt, refs, labels, {i: s.meta for i, s in references.items()}, ranking, thresholds, metrics)
+
+
+def years_exceeding(
+    year_metrics: pd.DataFrame,
+    references: pd.DataFrame,
+    labels: dict,
+    metric: str,
+    location: str,
+    latest_complete_year: int | None = None,
+) -> pd.DataFrame:
+    """How many observed years exceeded each reference file of one location on ``metric``.
+
+    ``year_metrics`` has one row per analysed year (index = year); ``references`` one row per
+    reference file of the same location (index = file id). A year exceeds a file when its metric
+    is strictly greater. The statement reads e.g. "5 of the last 10 years (2016–2025) exceeded
+    DSY1 · 2050s · High emissions · 50th percentile for Zone 7 on SWCDH"; "last" is used when the
+    range runs to ``latest_complete_year`` (default: last year).
+    """
+    if metric not in METRIC_INFO:
+        raise ValueError(f"Unknown metric {metric!r}")
+    values = year_metrics[metric].dropna()
+    if values.empty:
+        raise ValueError("No analysed years to compare")
+    years = sorted(int(y) for y in values.index)
+    n, y0, y1 = len(years), years[0], years[-1]
+    latest = latest_complete_year if latest_complete_year is not None else pd.Timestamp.today().year - 1
+    span = f"{'the last ' if y1 >= latest else 'the '}{n} year{'s' if n != 1 else ''} ({y0}–{y1})" if n > 1 else f"{y0}"
+    name, unit, _ = METRIC_INFO[metric]
+    rows = []
+    for ref_id, ref_value in references[metric].dropna().items():
+        k = int((values > ref_value).sum())
+        exceeded = [int(y) for y, v in values.items() if v > ref_value]
+        lead = f"{k} of {span}" if n > 1 else (f"{y0}" if k else f"{y0} did not")
+        verb = "exceeded" if (n > 1 or k) else "exceed"
+        rows.append({
+            "reference": ref_id,
+            "label": labels.get(ref_id, str(ref_id)),
+            "reference_value": float(ref_value),
+            "years_exceeded": k,
+            "years": n,
+            "share": k / n,
+            "exceeding_years": ", ".join(map(str, exceeded)),
+            "statement": f"{lead} {verb} {labels.get(ref_id, ref_id)} for {location} on {name}",
+        })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values(["reference_value"], ascending=False).reset_index(drop=True)

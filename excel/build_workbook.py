@@ -24,18 +24,22 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter as col
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.formula import ArrayFormula
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from summers_dsy.compare import LOG_METRICS, resolve_thresholds  # noqa: E402
 from summers_dsy.metrics import DEFAULT_COMPARISON_METRICS, METRIC_INFO, AnalysisConfig, analyse  # noqa: E402
 from summers_dsy.model import WeatherSeries  # noqa: E402
+from summers_dsy.sources.meteostat import ATTRIBUTION, bundled_stations  # noqa: E402
 from summers_dsy.synthetic import WarmSpell, demo_library, synthetic_year  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "summers_dsy.xlsx"
 
 N_HOURS = int(__import__("os").environ.get("WB_HOURS", 10_000))  # hourly rows available (a year plus a preceding December fits)
 N_DAYS = 420
+N_YEARS = 100  # rows in the Years table (one per analysed station-year)
+N_REFS = 120  # reference files listed for one location on 'Years vs DSY'
 N_LIB = 2500  # the full CIBSE 2025 set (28 zones × 4 file types × 18 scenarios) is 2,016 files
 H0, H1 = 2, N_HOURS + 1  # hourly data rows
 D0, D1 = 2, N_DAYS + 1  # daily rows
@@ -127,6 +131,10 @@ def build():
     cc = wb.create_sheet("Compare calc")
     cd = wb.create_sheet("Chart data")
     lg = wb.create_sheet("Import log")
+    ms_ws = wb.create_sheet("Meteostat", 2)
+    yv = wb.create_sheet("Years vs DSY", 3)
+    yr_ws = wb.create_sheet("Years")
+    stn = wb.create_sheet("Stations")
 
     # ---------------------------------------------------------- Settings
     title(st, "Settings", "Yellow cells with blue text are inputs. Everything else is calculated.")
@@ -187,6 +195,9 @@ def build():
          "TM59:2026: the mean bedroom temperature at night must stay below 27 °C, with no more than 4 exceedance nights "
          "May–September. Applied here to outdoor air; a lower value is often more telling for UK nights.", True),
         (47, "Minimum valid hours for a night mean", 7, "night_min_hours", "", True),
+        (48, "Longest gap in daily means filled (days)", 3, "max_fill_days",
+         "Days with under 18 hours of data have no daily mean. For the running mean, gaps of up to this many days are "
+         "interpolated; after a longer gap the running mean restarts once 7 complete days are available.", True),
     ]
     for r, label, value, nm, note, is_input in settings:
         st.cell(row=r, column=1, value=label).font = f()
@@ -288,6 +299,7 @@ def build():
         ("Tod-1", 7), ("Tod-2", 7), ("Tod-3", 7), ("Tod-4", 7), ("Tod-5", 7), ("Tod-6", 7), ("Tod-7", 7),
         ("", 2), ("First hourly row", 8), ("Last hourly row", 8),
         ("Night hours", 7), ("Night mean (°C)", 9), ("Night ≥ threshold", 8), ("Month no.", 7), ("Year no.", 7),
+        ("Previous day with a mean", 8), ("Next day with a mean", 8), ("Daily mean for running mean (°C)", 10),
     ]
     header_row(dy, 1, [c[0] for c in dy_cols])
     for i, (_, w) in enumerate(dy_cols, start=1):
@@ -315,12 +327,19 @@ def build():
         dy[f"AJ{r}"] = f'=IF(AND(L{r}=1,ISNUMBER(AI{r})),IF(AI{r}>=night_mean_thr,1,0),0)'
         dy[f"AK{r}"] = f'=IF(B{r}="","",MONTH(B{r}))'
         dy[f"AL{r}"] = f'=IF(B{r}="","",YEAR(B{r}))'
+        # Short gaps in the daily means are interpolated for the running mean (as in the Python package).
+        dy[f"AM{r}"] = f'=IF(B{r}="","",IF(ISNUMBER(D{r}),A{r},N(AM{r - 1})))'
+        dy[f"AN{r}"] = f'=IF(B{r}="","",IF(ISNUMBER(D{r}),A{r},N(AN{r + 1})))'
+        dmean = f"$D${D0}:$D${D1}"
+        dy[f"AO{r}"] = (f'=IF(B{r}="","",IF(ISNUMBER(D{r}),D{r},IF(AND(N(AM{r})>0,N(AN{r})>0,N(AN{r})-N(AM{r})-1<=max_fill_days),'
+                        f'INDEX({dmean},AM{r})+(INDEX({dmean},AN{r})-INDEX({dmean},AM{r}))*(A{r}-AM{r})/(AN{r}-AM{r}),"")))')
+        dy[f"AO{r}"].number_format = "0.00"
         dy[f"AI{r}"].number_format = "0.00"
         dy[f"F{r}"] = f'=IF(OR(B{r}="",N(C{r})=0),"",MAX({day("E")}))'
         dy[f"G{r}"] = f'=IF(E{r}="","",F{r}-E{r})'
         dy[f"H{r}"] = f'=IF(B{r}="","",IF(COUNT(X{r}:AD{r})=7,SUMPRODUCT(X{r}:AD{r},rm_weights)/SUM(rm_weights),""))'
         dy[f"I{r}"] = (f'=IF(B{r}="","",IF(trm_method="7-day approximation",H{r},'
-                       f'IF(AND(ISNUMBER(I{r - 1}),ISNUMBER(D{r - 1})),(1-alpha)*D{r - 1}+alpha*I{r - 1},H{r})))')
+                       f'IF(AND(ISNUMBER(I{r - 1}),ISNUMBER(AO{r - 1})),(1-alpha)*AO{r - 1}+alpha*I{r - 1},H{r})))')
         dy[f"J{r}"] = f'=IF(ISNUMBER(I{r}),0.33*IF(clamp_trm="Yes",MIN(MAX(I{r},10),30),I{r})+18.8,"")'
         dy[f"K{r}"] = f'=IF(J{r}="","",J{r}+cat_offset)'
         dy[f"L{r}"] = (f'=IF(B{r}="","",IF(AND(MONTH(B{r})*100+DAY(B{r})>=season_lo,'
@@ -337,8 +356,8 @@ def build():
         dy[f"V{r}"] = f'=IF(AND(L{r}=1,ISNUMBER(E{r})),IF(E{r}>=night_thr,1,0),0)'
         for k in range(1, 8):
             c_ = col(23 + k)  # X..AD
-            dy[f"{c_}{r}"] = (f'=IF(B{r}="","",IF(A{r}-{k}>=1,INDEX($D${D0}:$D${D1},A{r}-{k}),'
-                              f'IF(cyclic="Yes",INDEX($D${D0}:$D${D1},A{r}-{k}+n_days),"")))')
+            dy[f"{c_}{r}"] = (f'=IF(B{r}="","",IF(A{r}-{k}>=1,INDEX($AO${D0}:$AO${D1},A{r}-{k}),'
+                              f'IF(cyclic="Yes",INDEX($AO${D0}:$AO${D1},A{r}-{k}+n_days),"")))')
         dy[f"B{r}"].number_format = "dd mmm yyyy"
         for c_ in "DEFGHIJKMNOPS":
             dy[f"{c_}{r}"].number_format = "0.00"
@@ -403,10 +422,17 @@ def build():
     sm[f"A{r}"].font = f(10, True)
     sm[f"A{r + 1}"], sm[f"B{r + 1}"], sm[f"C{r + 1}"] = "SWCDH threshold", "=swcdh_thr", "°C"
     sm[f"A{r + 2}"], sm[f"B{r + 2}"], sm[f"C{r + 2}"] = "TWCDH offset above Tcomf", "=twcdh_off", "K"
-    for rr in (r + 1, r + 2):
-        sm[f"B{rr}"].number_format = "0.00"
+    sm[f"A{r + 3}"] = "Season coverage"
+    sm[f"B{r + 3}"] = (f"=COUNTIF({HR('H')},1)/((DATE(analysis_year,e_month,e_day)-DATE(analysis_year,s_month,s_day)+1)*24)")
+    sm[f"C{r + 3}"] = "share of season hours with data"
+    sm[f"B{r + 3}"].number_format = "0.0%"
+    name(wb, "season_coverage", f"Summary!$B${r + 3}")
+    for rr in (r + 1, r + 2, r + 3):
+        if rr < r + 3:
+            sm[f"B{rr}"].number_format = "0.00"
         for c_ in "ABC":
             sm[f"{c_}{rr}"].font = f()
+    name(wb, "metric_labels", f"Summary!$A$5:$A${4 + len(METRICS)}")
 
     copy_r = r + 5
     sm[f"A{copy_r}"] = "Row to copy into the Library (select it, Copy, then Paste Special → Values on a Library row, from column H)"
@@ -600,7 +626,8 @@ def build():
     cp["A6"] = "Compare with location"
     cp["A6"].font = f(10, True)
     mark_input(cp["B6"])
-    cp["C6"] = "Blank = every included Library row. Otherwise type a location exactly as in Library column B, e.g. Zone 7."
+    cp["C6"] = ("Choose from the list of Library locations. Blank = every included Library row. "
+                "The Years vs DSY sheet compares only with this location.")
     cp["C6"].font = f(9, color=INK2)
     name(wb, "compare_loc", "Compare!$B$6")
     thr_s = f"Library!${col(c_thr_s)}${L0}:${col(c_thr_s)}${L1}"
@@ -789,6 +816,23 @@ def build():
          "in B6. If Compare warns that thresholds differ, run the UseLibraryThresholds macro. Compare and Dashboard then show "
          "the closest files.", f()),
         ("", None),
+        ("Several years from Meteostat (summers_dsy.xlsm)", f(11, True)),
+        ("1. On Compare, choose the location to compare with in B6 (the dropdown lists the Library's locations). Years are compared "
+         "only with that location's files, using its thresholds.", f()),
+        ("2. On Meteostat, choose a station from the list. To find one, type a UK postcode (Excel for Windows looks it up) or a "
+         "latitude and longitude: the five nearest stations are listed with their distance and years of hourly data.", f()),
+        ("3. Set the first and last years and run DownloadMeteostatYears (Alt+F8). Each year's file is downloaded from "
+         "data.meteostat.net (with the December before, to start the running mean), analysed and added to the Years sheet. "
+         "Years with under 80% of the May–September hours are listed but not counted.", f()),
+        ("4. Years vs DSY lists every file of the location, hottest first, with how many years exceeded it on the metric you "
+         "choose (default SWCDH, the metric CIBSE ranks DSY1 by), e.g. '5 of the last 10 years (2016–2025) exceeded DSY1 · "
+         "2050s · High emissions · 50th percentile for Zone 7 on SWCDH'.", f()),
+        ("   Downloading needs Excel for Windows. On a Mac or offline, save each https://data.meteostat.net/hourly/<year>/<station>.csv.gz, "
+         "unzip it, name it <station>_<year>.csv (e.g. 03772_2019.csv), put it in the Download folder set on the Meteostat sheet "
+         "and run the macro: files already there are used. By default model-forecast values that Meteostat uses to fill gaps are "
+         "dropped. Station data © Meteostat, CC BY 4.0; check meteostat.net's terms for the hourly data before commercial use.",
+         f(10, color=INK2)),
+        ("", None),
         ("Important: fix the thresholds before building the library", f(11, True)),
         ("SWCDH and TWCDH depend on regional thresholds, and every file in a comparison must use the same values. The folder import "
          "does this for you: with Settings → 'Thresholds for imported files' = Each location's TRY, it derives each location's values "
@@ -816,7 +860,7 @@ def build():
         ("", None),
         ("Limitations compared with the web app", f(11, True)),
         ("One weather file analysed at a time (the folder import loops over files for you). No automatic downloads: paste data from Open-Meteo, Meteostat, NOAA ISD, MIDAS Open or the web "
-         "app's CSV export. Daily gaps aren't interpolated. The charts always show 1 April – 30 September. The season must not "
+         "app's CSV export. Hourly gaps in pasted data aren't interpolated (the Meteostat macro fills gaps of up to 6 hours). The charts always show 1 April – 30 September. The season must not "
          "wrap past 31 December.", f()),
         ("For typical years, 1 January's running mean is seeded from the last 7 days of December; the web app spins up over 30 days. "
          "Results differ only in early January, not in the summer season.", f()),
@@ -843,7 +887,8 @@ def build():
         ws.conditional_formatting.add(f"F{H0}:V{H1}", FormulaRule(formula=['$E2=""'], font=Font(color="BFBFBF")))
 
     # Tab colours
-    for ws, color in ((readme, "898781"), (dash, BLUE), (st, "EDA100"), (hr, "EDA100"), (lb, "EDA100"), (cp, BLUE)):
+    for ws, color in ((readme, "898781"), (dash, BLUE), (st, "EDA100"), (hr, "EDA100"), (lb, "EDA100"), (cp, BLUE),
+                      (ms_ws, "EDA100"), (yv, BLUE)):
         ws.sheet_properties.tabColor = color
 
     # ---------------------------------------------------------- Import log (written by the macro)
@@ -856,6 +901,8 @@ def build():
     name(wb, "hourly_input", f"Hourly!$A${H0}:$E${H1}")
     name(wb, "summary_values", f"Summary!$B$5:$B${4 + len(METRICS)}")
 
+    build_meteostat_sheets(wb, ms_ws, yv, yr_ws, stn, cc, cp, summary_row, R0, R1, c_loc, c_thr_s, c_thr_t)
+
     # Code names, so the VBA project's document modules bind to the workbook and its sheets.
     wb.code_name = "ThisWorkbook"
     for i, ws in enumerate(wb.worksheets, start=1):
@@ -865,6 +912,261 @@ def build():
     wb.calculation.fullCalcOnLoad = True
     wb.save(OUT)
     return OUT
+
+
+def build_meteostat_sheets(wb, ms_ws, yv, yr_ws, stn, cc, cp, summary_row, R0, R1, c_loc, c_thr_s, c_thr_t):
+    """Stations list, Meteostat inputs, the Years table, 'Years vs DSY' statements and the location dropdown."""
+    nm = len(METRICS)
+    lib_metrics = f"Library!$H${L0}:${col(7 + nm)}${L1}"
+
+    # ---------------------------------------------------------- Stations (bundled UK list)
+    stations = bundled_stations()
+    title(stn, "Stations", f"UK Meteostat stations with hourly temperature observations. {ATTRIBUTION}")
+    heads = ["Meteostat ID", "Name", "Region", "Latitude", "Longitude", "Elevation (m)", "WMO", "ICAO",
+             "Hourly data from", "Hourly data to", "Label", "Distance (km)"]
+    header_row(stn, 4, heads)
+    for c_, w in zip("ABCDEFGHIJKL", (12, 34, 8, 9, 10, 9, 8, 7, 9, 9, 44, 10)):
+        stn.column_dimensions[c_].width = w
+    S0, S1 = 5, 4 + len(stations)
+    for i, rec in enumerate(stations.itertuples(index=False)):
+        r = S0 + i
+        vals = [rec.id, rec.name, rec.region if isinstance(rec.region, str) else "", rec.latitude, rec.longitude,
+                None if rec.elevation != rec.elevation else int(rec.elevation),
+                rec.wmo if isinstance(rec.wmo, str) else "", rec.icao if isinstance(rec.icao, str) else "",
+                None if rec.start_year != rec.start_year else int(rec.start_year),
+                None if rec.end_year != rec.end_year else int(rec.end_year), rec.label]
+        for j, v in enumerate(vals, start=1):
+            stn.cell(row=r, column=j, value=v).font = f()
+        stn[f"L{r}"] = (f'=IF(OR(ms_lat="",ms_lon=""),"",6371*2*ASIN(SQRT(SIN(RADIANS(D{r}-ms_lat)/2)^2+'
+                        f'COS(RADIANS(ms_lat))*COS(RADIANS(D{r}))*SIN(RADIANS(E{r}-ms_lon)/2)^2)))')
+        stn[f"L{r}"].number_format = "0.0"
+    stn.freeze_panes = "C5"
+    name(wb, "station_labels", f"Stations!$K${S0}:$K${S1}")
+    st_rng = lambda c_: f"Stations!${c_}${S0}:${c_}${S1}"  # noqa: E731
+
+    # ---------------------------------------------------------- Meteostat inputs
+    title(ms_ws, "Meteostat: download and analyse several years",
+          "Pick a station and a range of years, then run the DownloadMeteostatYears macro (Alt+F8). Each year is "
+          "downloaded, analysed with the Compare location's thresholds and added to the Years sheet. "
+          "Years vs DSY then counts how many years exceeded each reference file.")
+    ms_ws.column_dimensions["A"].width = 34
+    ms_ws.column_dimensions["B"].width = 44
+    ms_ws.column_dimensions["C"].width = 12
+    ms_ws.column_dimensions["D"].width = 80
+    def inp(r, label, value, nm_, note="", fmt=None):
+        ms_ws[f"A{r}"] = label
+        ms_ws[f"A{r}"].font = f()
+        c = ms_ws[f"B{r}"]
+        c.value = value
+        mark_input(c)
+        if fmt:
+            c.number_format = fmt
+        ms_ws[f"D{r}"] = note
+        ms_ws[f"D{r}"].font = f(9, color=INK2)
+        if nm_:
+            name(wb, nm_, f"Meteostat!$B${r}")
+    def calc(r, label, formula, nm_=None, fmt=None):
+        ms_ws[f"A{r}"] = label
+        ms_ws[f"A{r}"].font = f()
+        ms_ws[f"B{r}"] = formula
+        ms_ws[f"B{r}"].font = f(10, True)
+        if fmt:
+            ms_ws[f"B{r}"].number_format = fmt
+        if nm_:
+            name(wb, nm_, f"Meteostat!$B${r}")
+
+    ms_ws["A4"] = "1. Station"
+    ms_ws["A4"].font = f(11, True)
+    inp(5, "Station", "London Heathrow Airport (03772)", "ms_station",
+        "Choose from the list, or type a Meteostat station ID. Use the nearest-station helper below to find one.")
+    calc(6, "Meteostat station ID",
+         f'=IFERROR(INDEX({st_rng("A")},MATCH(ms_station,{st_rng("K")},0)),TRIM(ms_station))', "ms_station_id")
+    calc(7, "Hourly data available",
+         f'=IFERROR(INDEX({st_rng("I")},MATCH(ms_station_id,{st_rng("A")},0))&"–"&INDEX({st_rng("J")},MATCH(ms_station_id,{st_rng("A")},0)),"not in the station list")')
+    calc(8, "Station name", f'=IFERROR(INDEX({st_rng("B")},MATCH(ms_station_id,{st_rng("A")},0)),ms_station_id)', "ms_station_name")
+    calc(9, "Station key (Years sheet)", '=ms_station_name&" ("&ms_station_id&")"', "ms_key")
+
+    ms_ws["A10"] = "Find the nearest stations to a site"
+    ms_ws["A10"].font = f(11, True)
+    inp(11, "UK postcode", None, "ms_postcode",
+        "Looked up with postcodes.io (Excel for Windows only, via WEBSERVICE). Otherwise type the latitude and longitude.")
+    inp(12, "or latitude", None, None, "Decimal degrees, e.g. 51.5072", "0.0000")
+    inp(13, "and longitude", None, None, "Decimal degrees, e.g. -0.1276 (west is negative)", "0.0000")
+    ms_ws["F11"] = ('=IF(ms_postcode="","",IFERROR(_xlfn.WEBSERVICE("https://api.postcodes.io/postcodes/"'
+                    '&SUBSTITUTE(ms_postcode," ","")),""))')
+    ms_ws["F11"].font = f(8, color=MUTED)
+    ms_ws.column_dimensions["F"].hidden = True
+    jnum = lambda key: (f'IFERROR(_xlfn.NUMBERVALUE(MID($F$11,SEARCH("""{key}"":",$F$11)+{len(key) + 3},'  # noqa: E731
+                        f'SEARCH(",",$F$11,SEARCH("""{key}"":",$F$11))-SEARCH("""{key}"":",$F$11)-{len(key) + 3}),"."),"")')
+    calc(14, "Site latitude", f'=IF(B12<>"",B12,{jnum("latitude")})', "ms_lat", "0.0000")
+    calc(15, "Site longitude", f'=IF(B13<>"",B13,{jnum("longitude")})', "ms_lon", "0.0000")
+    ms_ws["A17"] = "Nearest stations (copy one into Station above)"
+    ms_ws["A17"].font = f(10, True)
+    for k in range(1, 6):
+        r = 17 + k
+        ms_ws[f"A{r}"] = k
+        ms_ws[f"A{r}"].alignment = Alignment(horizontal="right")
+        small = f"SMALL({st_rng('L')},{k})"
+        ms_ws[f"B{r}"] = f'=IFERROR(INDEX({st_rng("K")},MATCH({small},{st_rng("L")},0)),"")'
+        ms_ws[f"C{r}"] = f'=IFERROR({small},"")'
+        ms_ws[f"C{r}"].number_format = '0.0" km"'
+        ms_ws[f"D{r}"] = (f'=IFERROR("hourly data "&INDEX({st_rng("I")},MATCH({small},{st_rng("L")},0))&"–"'
+                          f'&INDEX({st_rng("J")},MATCH({small},{st_rng("L")},0)),"")')
+        for c_ in "ABCD":
+            ms_ws[f"{c_}{r}"].font = f(10, color=INK2 if c_ != "B" else INK)
+
+    ms_ws["A24"] = "2. Years"
+    ms_ws["A24"].font = f(11, True)
+    inp(25, "From year", 2016, "ms_year_from", "Whole calendar years. The December before is downloaded too, to start the running mean.")
+    inp(26, "To year", 2025, "ms_year_to", "The latest complete May–September season is the most recent useful year.")
+    inp(27, "Fill gaps with model data?", "No", "ms_include_model",
+        "No (recommended): observations only; gaps of up to 6 hours are interpolated and years with under 80% of the "
+        "season are not counted. Yes: keep Meteostat's model forecasts where observations are missing.")
+    inp(28, "Download folder", None, "ms_folder",
+        "Optional. Blank = a summers_dsy_meteostat folder in your temporary folder. Files are named <station>_<year>.csv "
+        "and are reused if already there; on a Mac, or offline, save Meteostat's files there yourself (see Read me).")
+    ms_ws["A30"] = "3. Run DownloadMeteostatYears (Alt+F8)"
+    ms_ws["A30"].font = f(11, True)
+    ms_ws["A31"] = "Last run"
+    ms_ws["A31"].font = f()
+    ms_ws["B31"].font = f(10, color=INK2)
+    name(wb, "ms_status", "Meteostat!$B$31")
+    ms_ws["A33"] = ATTRIBUTION + " Hourly data © Meteostat, from data.meteostat.net; see meteostat.net for its licence terms."
+    ms_ws["A33"].font = f(9, color=MUTED, italic=True)
+    for rng, options in (("B27", '"Yes,No"'),):
+        dv = DataValidation(type="list", formula1=options, allow_blank=False)
+        ms_ws.add_data_validation(dv)
+        dv.add(rng)
+    dv = DataValidation(type="list", formula1="station_labels", allow_blank=True, showErrorMessage=False)
+    ms_ws.add_data_validation(dv)
+    dv.add("B5")
+
+    # ---------------------------------------------------------- Years (written by the macro)
+    Y0, Y1 = 6, 5 + N_YEARS
+    title(yr_ws, "Years", "One row per station-year, written by the DownloadMeteostatYears macro. "
+          "Metrics are blank where the season has under 80% of its hours.")
+    y_head = (["Year", "Station", "Station ID", "Season coverage", "Model-filled share", "Notes"]
+              + [f"{METRIC_INFO[k][0]} ({METRIC_INFO[k][1]})" for k in METRICS]
+              + ["SWCDH threshold used (°C)", "TWCDH offset used (K)"])
+    header_row(yr_ws, 5, y_head)
+    yr_ws.row_dimensions[5].height = 44
+    for i, w in enumerate([7, 34, 10, 9, 9, 30] + [11] * nm + [11, 11], start=1):
+        yr_ws.column_dimensions[col(i)].width = w
+    for r in range(Y0, Y1 + 1):
+        yr_ws[f"C{r}"].number_format = "@"  # keep IDs like 03772 as text
+        yr_ws[f"D{r}"].number_format = "0.0%"
+        yr_ws[f"E{r}"].number_format = "0.0%"
+        for j in range(nm):
+            yr_ws.cell(row=r, column=7 + j).number_format = "#,##0.0"
+    yr_ws.freeze_panes = "D6"
+    name(wb, "years_table", f"Years!$A${Y0}:${col(8 + nm)}${Y1}")
+    YA, YB = f"Years!$A${Y0}:$A${Y1}", f"Years!$B${Y0}:$B${Y1}"
+    ymetric = f"INDEX(Years!$G${Y0}:${col(6 + nm)}${Y1},0,yrs_mi)"
+
+    # ---------------------------------------------------------- Compare calc helpers
+    c_cnt, c_dl, c_in, c_val, c_skey = (col(cc[f"{c_loc}{R0}"].column + k) for k in range(1, 6))
+    header_row(cc, 4, ["Distinct location count", "Location list", "In Years-vs-DSY location", "Metric value", "Sort key"],
+               start_col=cc[f"{c_loc}{R0}"].column + 1)
+    for r in range(R0, R1 + 1):
+        lr = L0 + (r - R0)
+        prev = f"N({c_cnt}{r - 1})"
+        cc[f"{c_cnt}{r}"] = (f'=IF(Library!$B{lr}="",{prev},IF(MATCH(Library!$B{lr},Library!$B${L0}:$B${L1},0)={r - R0 + 1},'
+                             f'{prev}+1,{prev}))')
+        cc[f"{c_dl}{r}"] = f'=IFERROR(INDEX(Library!$B${L0}:$B${L1},MATCH({r - R0 + 1},${c_cnt}${R0}:${c_cnt}${R1},0)),"")'
+        cc[f"{c_in}{r}"] = (f'=IF(AND(compare_loc<>"",Library!$A{lr}=1,Library!$B{lr}=compare_loc,'
+                            f'ISNUMBER(INDEX(Library!$H{lr}:${col(7 + nm)}{lr},1,yrs_mi))),1,0)')
+        cc[f"{c_val}{r}"] = f'=IF({c_in}{r}=1,INDEX(Library!$H{lr}:${col(7 + nm)}{lr},1,yrs_mi),"")'
+        cc[f"{c_skey}{r}"] = f'=IF({c_in}{r}=1,{c_val}{r}-ROW()*0.000000001,"")'
+    name(wb, "location_list", f"OFFSET('Compare calc'!${c_dl}${R0},0,0,MAX(1,MAX('Compare calc'!${c_cnt}${R0}:${c_cnt}${R1})),1)")
+    dv = DataValidation(type="list", formula1="location_list", allow_blank=True, showErrorMessage=False)
+    cp.add_data_validation(dv)
+    dv.add("B6")
+    SKEY = f"'Compare calc'!${c_skey}${R0}:${c_skey}${R1}"
+    SVAL = f"'Compare calc'!${c_val}${R0}:${c_val}${R1}"
+
+    # ---------------------------------------------------------- Years vs DSY
+    title(yv, "Years vs DSY", "How many of the downloaded years exceeded each reference file of one location. "
+          "Only files for the Compare sheet's location are used.")
+    yv.column_dimensions["A"].width = 30
+    yv.column_dimensions["B"].width = 48
+    for c_, w in zip("CDEFG", (12, 10, 8, 30, 110)):
+        yv.column_dimensions[c_].width = w
+    rows = [
+        (4, "Location (choose on Compare, B6)", '=IF(compare_loc="","(choose a location on the Compare sheet)",compare_loc)', None),
+        (5, "Metric", "SWCDH", "yrs_metric"),
+        (6, "Station", '=ms_key', None),
+        (7, "Years counted", f'=COUNTIFS({YB},ms_key,{YA},">="&ms_year_from,{YA},"<="&ms_year_to,{ymetric},"<>")', "yrs_n"),
+        (8, "First year", f'=IF(yrs_n=0,"",_xlfn.MINIFS({YA},{YB},ms_key,{YA},">="&ms_year_from,{YA},"<="&ms_year_to,{ymetric},"<>"))', "yrs_first"),
+        (9, "Last year", f'=IF(yrs_n=0,"",_xlfn.MAXIFS({YA},{YB},ms_key,{YA},">="&ms_year_from,{YA},"<="&ms_year_to,{ymetric},"<>"))', "yrs_last"),
+        (10, "Latest complete season", '=IF(TODAY()>=DATE(YEAR(TODAY()),10,1),YEAR(TODAY()),YEAR(TODAY())-1)', "yrs_latest"),
+    ]
+    for r, label, value, nm_ in rows:
+        yv[f"A{r}"] = label
+        yv[f"A{r}"].font = f()
+        yv[f"B{r}"] = value
+        if r == 5:
+            mark_input(yv["B5"])
+        else:
+            yv[f"B{r}"].font = f(10, True)
+        if nm_:
+            name(wb, nm_, f"'Years vs DSY'!$B${r}")
+    yv["Z5"] = "=MATCH(yrs_metric,metric_labels,0)"
+    yv["Z5"].font = f(8, color=MUTED)
+    yv.column_dimensions["Z"].hidden = True
+    name(wb, "yrs_mi", "'Years vs DSY'!$Z$5")
+    yv["C5"] = "CIBSE ranks DSY1 by SWCDH. A year exceeds a file when its value is higher."
+    yv["C5"].font = f(9, color=INK2)
+    dv = DataValidation(type="list", formula1="metric_labels", allow_blank=False)
+    yv.add_data_validation(dv)
+    dv.add("B5")
+    yv["A11"] = ('=IF(yrs_n=0,"No analysed years for this station and range yet: run DownloadMeteostatYears.",'
+                 'IF(compare_loc="","Choose the location to compare with on the Compare sheet (B6).",""))')
+    yv["A11"].font = f(10, True, color="C00000")
+    # Years analysed with thresholds other than the location's
+    loc_thr_s = (f'_xlfn.MINIFS(Library!${col(c_thr_s)}${L0}:${col(c_thr_s)}${L1},Library!$B${L0}:$B${L1},compare_loc,'
+                 f'Library!$A${L0}:$A${L1},1)')
+    yv["A12"] = (f'=IF(OR(compare_loc="",yrs_n=0,COUNTIFS(Library!$B${L0}:$B${L1},compare_loc,'
+                 f'Library!${col(c_thr_s)}${L0}:${col(c_thr_s)}${L1},"<>")=0),"",IF(SUMPRODUCT(({YB}=ms_key)*'
+                 f'(Years!${col(7 + nm)}${Y0}:${col(7 + nm)}${Y1}<>"")*(ABS(Years!${col(7 + nm)}${Y0}:${col(7 + nm)}${Y1}-{loc_thr_s})>0.005))>0,'
+                 f'"Some years were analysed with different thresholds from this location\'s files: run DownloadMeteostatYears again.",""))')
+    yv["A12"].font = f(10, True, color="C00000")
+
+    T0 = 15
+    header_row(yv, T0 - 1, ["Reference file", "Short label", "File value", "Years exceeded", "Years", "Which years", "Statement"])
+    which_rng = f"(({YB}=ms_key)*({YA}>=ms_year_from)*({YA}<=ms_year_to))"
+    for k in range(1, N_REFS + 1):
+        r = T0 + k - 1
+        key = f"LARGE({SKEY},{k})"
+        idx = f"MATCH({key},{SKEY},0)"
+        yv[f"A{r}"] = f'=IF(COUNT({SKEY})<{k},"",INDEX(Library!$G${L0}:$G${L1},{idx}))'
+        yv[f"B{r}"] = f'=SUBSTITUTE(SUBSTITUTE(A{r}," emissions","")," percentile","")'
+        yv[f"C{r}"] = f'=IF(A{r}="","",INDEX({SVAL},{idx}))'
+        yv[f"D{r}"] = (f'=IF(A{r}="","",COUNTIFS({ymetric},">"&C{r},{YB},ms_key,{YA},">="&ms_year_from,'
+                       f'{YA},"<="&ms_year_to))')
+        yv[f"E{r}"] = f'=IF(A{r}="","",yrs_n)'
+        yv[f"F{r}"] = ArrayFormula(f"F{r}", f'=IF(A{r}="","",_xlfn.TEXTJOIN(", ",TRUE,IF({which_rng}*ISNUMBER({ymetric})'
+                                            f'*(IFERROR({ymetric}*1,0)>C{r}),{YA},"")))')
+        yv[f"G{r}"] = (f'=IF(OR(A{r}="",yrs_n=0),"",IF(yrs_n>1,D{r}&" of "&IF(yrs_last>=yrs_latest,"the last ","the ")'
+                       f'&yrs_n&" years ("&yrs_first&"–"&yrs_last&") exceeded ",IF(D{r}>0,yrs_first&" exceeded ",'
+                       f'yrs_first&" did not exceed "))&A{r}&" for "&compare_loc&" on "&yrs_metric)')
+        yv[f"C{r}"].number_format = "#,##0.0"
+        yv.row_dimensions[r].height = 15
+        for c_ in "ABCDEFG":
+            yv[f"{c_}{r}"].font = f(10, color=INK2 if c_ in "BEF" else INK)
+    yv.freeze_panes = f"A{T0}"
+    chart = BarChart()
+    chart.type = "bar"
+    chart.title = "Years exceeding each file (first 24, hottest first)"
+    chart.add_data(Reference(yv, min_col=4, min_row=T0 - 1, max_row=T0 + 23), titles_from_data=True)
+    chart.set_categories(Reference(yv, min_col=2, min_row=T0, max_row=T0 + 23))
+    chart.series[0].graphicalProperties = GraphicalProperties(solidFill=BLUE)
+    chart.series[0].graphicalProperties.line = LineProperties(noFill=True)
+    chart.x_axis.scaling.orientation = "maxMin"
+    chart.y_axis.scaling.min = 0
+    chart.legend = None
+    chart.gapWidth = 60
+    chart.height, chart.width = 14, 16
+    yv.add_chart(chart, "I4")
 
 
 if __name__ == "__main__":

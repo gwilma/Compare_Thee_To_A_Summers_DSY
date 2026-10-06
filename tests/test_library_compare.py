@@ -81,3 +81,23 @@ def test_compare_end_to_end(library):
     assert result.headline("Demo").startswith("2019 in Demo was most similar to DSY2")
     # Shared thresholds were used everywhere.
     assert {a.static_threshold for a in result.references.values()} == {th.static_threshold}
+
+
+def test_years_exceeding_counts_and_statements():
+    from summers_dsy.compare import years_exceeding
+
+    years = pd.DataFrame({"swcdh": {2016: 100.0, 2017: 300.0, 2018: 900.0, 2019: 250.0, 2020: 50.0}})
+    refs = pd.DataFrame({"swcdh": {"a": 200.0, "b": 1000.0, "c": 60.0}})
+    labels = {"a": "DSY1 · 2050s · High emissions · 50th percentile", "b": "DSY3 · 2080s", "c": "TRY · current climate"}
+    out = years_exceeding(years, refs, labels, "swcdh", "Zone 7", latest_complete_year=2020).set_index("reference")
+    assert out.loc["a", "years_exceeded"] == 3 and out.loc["a", "exceeding_years"] == "2017, 2018, 2019"
+    assert out.loc["b", "years_exceeded"] == 0 and out.loc["c", "years_exceeded"] == 4
+    assert out.loc["a", "statement"] == ("3 of the last 5 years (2016–2020) exceeded "
+                                         "DSY1 · 2050s · High emissions · 50th percentile for Zone 7 on SWCDH")
+    # Not "last" when the range stops before the latest complete year; sorted hottest reference first.
+    older = years_exceeding(years, refs, labels, "swcdh", "Zone 7", latest_complete_year=2025)
+    assert older.iloc[0]["reference"] == "b"
+    assert older.iloc[1]["statement"].startswith("3 of the 5 years (2016–2020) exceeded")
+    one = years_exceeding(years.loc[[2018]], refs, labels, "swcdh", "Zone 7", latest_complete_year=2018).set_index("reference")
+    assert one.loc["a", "statement"].startswith("2018 exceeded")
+    assert one.loc["b", "statement"].startswith("2018 did not exceed")

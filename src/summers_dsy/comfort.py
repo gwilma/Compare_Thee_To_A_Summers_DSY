@@ -23,6 +23,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .model import fill_short_gaps
+
 SEVEN_DAY_WEIGHTS = np.array([1.0, 0.8, 0.6, 0.5, 0.4, 0.3, 0.2])
 
 CATEGORY_OFFSETS = {"I": 2.0, "II": 3.0, "III": 4.0}
@@ -64,12 +66,12 @@ def running_mean(
     then applies the exact recursion; ``method="seven_day"`` uses the
     approximation every day. With ``cyclic=True`` (typical/design years) the
     end of the year is wrapped round to spin up the start of the year.
-    Short gaps in the daily means (``max_fill_days``) are interpolated; after a
+    Gaps of up to ``max_fill_days`` in the daily means are interpolated; after a
     longer gap the recursion is reseeded once seven valid days are available.
     """
     if not 0 <= alpha < 1:
         raise ValueError("alpha must be in [0, 1)")
-    daily = daily.astype(float).interpolate(limit=max_fill_days, limit_area="inside")
+    daily = fill_short_gaps(daily.astype(float), max_fill_days)
 
     if cyclic:
         n = min(CYCLIC_SPINUP_DAYS, len(daily))

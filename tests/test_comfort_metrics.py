@@ -144,3 +144,10 @@ def test_seasonal_means_use_the_analysis_year_only():
     assert m["mean_t_son"] == pytest.approx(10.0)
     assert m["mean_t_jja"] == pytest.approx((23 * 10 + 25) / 24)
     assert m["jja_mean_daily_max"] == pytest.approx(25.0)
+
+
+def test_season_coverage_counts_against_the_whole_season():
+    idx = pd.date_range("2019-01-01", "2019-08-24 23:00", freq="h")  # record stops in late August
+    res = analyse(WeatherSeries("t", pd.DataFrame({"dry_bulb": 15.0}, index=idx)),
+                  AnalysisConfig(static_threshold=25, twcdh_offset=0))
+    assert res.metrics["season_coverage"] == pytest.approx(116 / 153, abs=1e-9)

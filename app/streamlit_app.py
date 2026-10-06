@@ -15,6 +15,7 @@ from summers_dsy import charts
 from summers_dsy.compare import (
     Thresholds,
     bracket,
+    years_exceeding,
     compare,
     pick_baseline,
     resolve_thresholds,
@@ -36,6 +37,8 @@ from summers_dsy.model import WeatherSeries
 from summers_dsy.sources import (
     STATIONS,
     SourceError,
+    data_dir,
+    meteostat,
     combine_uploads,
     fetch_meteostat,
     fetch_midas,
@@ -48,6 +51,8 @@ st.set_page_config(page_title="Compare thee to a summer's DSY", page_icon="☀�
 
 THEME = "dark" if getattr(getattr(st.context, "theme", None), "type", "light") == "dark" else "light"
 TODAY = dt.date.today()
+#: Latest year whose May–September season is complete.
+LATEST_COMPLETE = TODAY.year if TODAY >= dt.date(TODAY.year, 10, 1) else TODAY.year - 1
 PLOTLY = {"displaylogo": False, "modeBarButtonsToRemove": ["lasso2d", "select2d"]}
 
 st.markdown(
@@ -202,6 +207,97 @@ def per_year_analyses(obs_key: str, _observed: WeatherSeries, config_key, thr: t
     return out
 
 
+@st.cache_data(show_spinner=False)
+def station_list(_stamp: str) -> pd.DataFrame:
+    return meteostat.load_stations()
+
+
+def station_stamp() -> str:
+    p = data_dir() / "meteostat_stations.csv"
+    return str(p.stat().st_mtime) if p.exists() else "bundled"
+
+
+def describe_station(row: pd.Series) -> str:
+    years = f"{int(row['start_year'])}–{int(row['end_year'])}" if pd.notna(row["start_year"]) else "years unknown"
+    if pd.notna(row["end_year"]) and int(row["end_year"]) < LATEST_COMPLETE - 1:
+        years += ", closed"
+    dist = f" · {row['distance_km']:.0f} km" if "distance_km" in row and pd.notna(row.get("distance_km")) else ""
+    return f"{row['name']} ({row['id']}) · {years}{dist}"
+
+
+def meteostat_picker() -> None:
+    """Station search, year range and multi-year download from Meteostat."""
+    stations = station_list(station_stamp())
+    how = st.radio("Find a station", ["Name", "Postcode", "Lat/long"], horizontal=True,
+                   help="Search by name or code (WMO, ICAO), or list the stations nearest a UK postcode or a point.")
+    candidates, origin = stations, None
+    if how == "Name":
+        q = st.text_input("Search", placeholder="e.g. Heathrow, EGLL or 03772")
+        candidates = meteostat.search_stations(stations, q)
+    elif how == "Postcode":
+        pc = st.text_input("UK postcode", placeholder="e.g. SW1A 1AA")
+        if pc.strip():
+            try:
+                lat, lon, where = meteostat.geocode_postcode(pc)
+                origin = (lat, lon)
+                st.caption(f"{where}: {lat:.4f}, {lon:.4f}")
+            except (SourceError, ValueError) as exc:
+                st.error(str(exc))
+    else:
+        c1, c2 = st.columns(2)
+        origin = (c1.number_input("Latitude", value=51.5072, format="%.4f"),
+                  c2.number_input("Longitude", value=-0.1276, format="%.4f"))
+    if origin:
+        candidates = meteostat.nearest_stations(stations, *origin, n=10)
+    if candidates.empty:
+        st.warning("No station matches. Try another name or a postcode.")
+        return
+    sid = st.selectbox("Station", candidates.index.tolist(), format_func=lambda i: describe_station(candidates.loc[i]))
+    row = candidates.loc[sid]
+    st.plotly_chart(charts.station_map(candidates, row["id"], origin, THEME), width="stretch", config=PLOTLY)
+
+    first = int(row["start_year"]) if pd.notna(row["start_year"]) else 1973
+    last = min(int(row["end_year"]) if pd.notna(row["end_year"]) else LATEST_COMPLETE, LATEST_COMPLETE)
+    if last < first:
+        st.warning("This station has no complete summer of hourly data.")
+        return
+    y0, y1 = st.slider("Years to download", first, last, (max(first, last - 9), last),
+                       help="Whole calendar years. The December before the first year is downloaded too, to start the running mean.")
+    include_model = st.checkbox("Fill gaps with Meteostat model data", value=False,
+                                help="Meteostat fills missing hours with weather-model forecasts. Off: observations only "
+                                     "(gaps of up to 6 hours are interpolated; years with under 80% of the season are skipped).")
+    locs = LIB.locations()
+    guess = meteostat.station_location_guess(str(row["name"]))
+    options = ["(choose later)"] + locs
+    loc = st.selectbox("Library location to compare with", options,
+                       index=options.index(guess) if guess in options else 0,
+                       help="Years are compared only with reference files of this location.")
+    n = y1 - y0 + 1
+    if st.button(f"Download {n} year{'s' if n > 1 else ''} from Meteostat", type="primary", width="stretch"):
+        bar = st.progress(0.0, text="Starting download…")
+        try:
+            series = meteostat.fetch_years(
+                str(row["id"]), y0, y1, include_model=include_model, name=str(row["name"]),
+                progress=lambda k, total, year: bar.progress(k / total, text=f"Downloaded {year} ({k} of {total} files)"))
+            bar.empty()
+            st.session_state["observed"] = series
+            st.session_state["observed_key"] = f"meteostat:{row['id']}:{y0}-{y1}:{include_model}"
+            st.session_state["observed_location"] = None if loc == "(choose later)" else loc
+            st.session_state.pop("selected_year", None)
+        except (SourceError, ValueError) as exc:
+            bar.empty()
+            st.error(str(exc))
+    with st.expander("Station list"):
+        st.caption(f"{len(stations)} UK stations with hourly temperature observations. {meteostat.ATTRIBUTION}")
+        if st.button("Refresh from Meteostat"):
+            try:
+                meteostat.refresh_stations()
+                station_list.clear()
+                st.rerun()
+            except SourceError as exc:
+                st.error(str(exc))
+
+
 # ------------------------------------------------------------------ header
 
 st.title("Compare thee to a summer's DSY")
@@ -221,17 +317,19 @@ with tab_obs:
     with left:
         source = st.selectbox(
             "Data source",
-            ["open-meteo", "meteostat", "noaa-isd", "midas", "upload"],
+            ["meteostat", "open-meteo", "noaa-isd", "midas", "upload"],
             format_func=lambda s: {
                 "open-meteo": "Open-Meteo: ERA5 reanalysis",
-                "meteostat": "Meteostat: station observations",
+                "meteostat": "Meteostat: station observations, many years",
                 "noaa-isd": "NOAA ISD: station observations",
                 "midas": "Met Office MIDAS Open (CEDA)",
                 "upload": "Upload files (EPW, CSV, MIDAS)",
             }[s],
         )
         station_names = [s.name for s in STATIONS] + ["Custom…"]
-        if source != "upload":
+        if source == "meteostat":
+            meteostat_picker()
+        elif source != "upload":
             st_name = st.selectbox("Station", station_names)
             station = next((s for s in STATIONS if s.name == st_name), None)
             c1, c2 = st.columns(2)
@@ -245,8 +343,6 @@ with tab_obs:
                 params["model"] = st.selectbox("Reanalysis", ["era5", "era5_land", "best_match"],
                                                format_func={"era5": "ERA5 (~25 km)", "era5_land": "ERA5-Land (~9 km)", "best_match": "Open-Meteo best match"}.get,
                                                help="ERA5 is ~25 km, ERA5-Land ~9 km. Both smooth urban heat islands and peaks.")
-            elif source == "meteostat":
-                params["station"] = st.text_input("Meteostat station id", station.wmo if station else "")
             elif source == "noaa-isd":
                 params["station"] = st.text_input("ISD station (USAF+WBAN)", (station.usaf_wban or "") if station else "")
             elif source == "midas":
@@ -290,6 +386,15 @@ with tab_obs:
             analyses = per_year_analyses(st.session_state["observed_key"], observed, CONFIG_KEY, (thr.static_threshold, thr.twcdh_offset))
             st.session_state["observed_analyses"] = analyses
             st.subheader(observed.name)
+            if observed.source == "meteostat":
+                miss = observed.meta.get("missing_years") or []
+                share = observed.meta.get("model_share") or {}
+                model_note = (f"model-filled hours {'included' if observed.meta.get('include_model') else 'dropped'} "
+                              f"(up to {100 * max(share.values()):.1f}% of a year)" if share else "")
+                st.caption(" · ".join(x for x in (
+                    f"Meteostat station {observed.meta.get('station')}",
+                    f"no file for {', '.join(map(str, miss))}" if miss else "", model_note,
+                    observed.meta.get("attribution", "")) if x))
             st.caption(
                 f"{observed.source} · {observed.years[0]}–{observed.years[-1]} · {observed.completeness():.1%} hourly coverage · "
                 f"SWCDH threshold {thr.static_threshold:.1f} °C, TWCDH offset {thr.twcdh_offset:+.1f} K ({thr.provenance})"
@@ -501,6 +606,39 @@ with tab_cmp:
             for col, (rid, row) in zip(cols, top.iterrows()):
                 col.metric(row["label"], f"{row['score']:.0f} / 100", help="Similarity: 100 means identical on every chosen metric")
 
+            st.markdown(f"##### How many years exceeded each {location} reference file")
+            yr_an = per_year_analyses(st.session_state["observed_key"], observed, CONFIG_KEY,
+                                      (thr.static_threshold, thr.twcdh_offset))
+            year_table = pd.DataFrame({y: a.metrics for y, a in yr_an.items()}).T
+            mc1, mc2 = st.columns([1, 2])
+            mkey = mc1.selectbox("Metric", list(METRIC_INFO), index=list(METRIC_INFO).index("swcdh"),
+                                 format_func=lambda k: f"{METRIC_INFO[k][0]} ({METRIC_INFO[k][1]})", key="years_metric",
+                                 help="CIBSE ranks DSY1 by SWCDH. A year exceeds a file when its value is higher.")
+            ref_table = result.reference_metrics()
+            ex = years_exceeding(year_table, ref_table, result.labels, mkey, location, latest_complete_year=LATEST_COMPLETE)
+            mc2.caption(f"{len(year_table)} analysed year(s) against the {len(ref_table)} selected {location} files, all with the "
+                        f"same thresholds. Only files for this location are used.")
+            key_rows = ex[[result.meta[i].get("kind") == "DSY1" for i in ex["reference"]]]
+            if not key_rows.empty:
+                st.markdown("\n".join(f"- {s_}" for s_ in key_rows["statement"]))
+            st.dataframe(
+                ex[["statement", "years_exceeded", "years", "exceeding_years", "reference_value"]].rename(columns={
+                    "statement": "Statement", "years_exceeded": "Years exceeded", "years": "Years",
+                    "exceeding_years": "Which years", "reference_value": f"File {METRIC_INFO[mkey][0]}"}),
+                hide_index=True, width="stretch",
+                column_config={f"File {METRIC_INFO[mkey][0]}": st.column_config.NumberColumn(format="%.1f"),
+                               "Statement": st.column_config.TextColumn(width="large")})
+            default_refs = [i for i in ex["reference"] if result.meta[i].get("kind") == "DSY1"
+                            and result.meta[i].get("percentile") in (50, None)][:4] or list(ex["reference"][:3])
+            shown = st.multiselect("Reference lines on the chart", list(ex["reference"]), default=default_refs,
+                                   format_func=lambda i: result.labels[i])
+            st.plotly_chart(charts.annual_bars(year_table[mkey], mkey, THEME, selected=year,
+                                               reference_lines={charts.short_label(result.labels[i]): ref_table.loc[i, mkey]
+                                                                for i in shown}),
+                            width="stretch", config=PLOTLY)
+            st.download_button("Download the statements (CSV)", ex.to_csv(index=False).encode(),
+                               file_name=f"years_vs_{location}_{mkey}.csv".replace(" ", "_"))
+
             g1, g2 = st.columns([1, 1], gap="large")
             with g1:
                 st.markdown("##### Closest reference files")
@@ -576,13 +714,23 @@ overheating risk. Both use the analysis year only: winter takes that year's Janu
 Hours with rounded $\Delta T = T - T_{max} \ge 1$ K, the largest daily weighted exceedance $\sum h_e \Delta T$, and the maximum $\Delta T$.
 These are computed on external air as indicators of climate severity. They are *not* building compliance checks.
 
+### Years against reference files
+For a location's reference files, the app counts how many of the analysed years had a higher value of the chosen
+metric (default SWCDH) than each file, e.g. "5 of the last 10 years (2016–2025) exceeded DSY1 · 2050s · High
+emissions · 50th percentile". It says "the last" when the range runs to the latest complete summer. Only files of
+the chosen location are used, and every year and file is analysed with that location's thresholds.
+
 ### Similarity
 Each metric is put on a log scale where it is a squared or summed exceedance, then divided by its spread across the files
 being compared. The distance is the weighted RMS difference, and the score is $100\,e^{-d}$.
 
 ### Data sources and caveats
 * **Open-Meteo ERA5 / ERA5-Land**: gridded reanalysis (~25 km / ~9 km). It under-represents peaks and urban heat islands.
-* **Meteostat** and **NOAA ISD**: station reports. Where several reports fall near an hour, the one nearest the hour is used.
+* **Meteostat**: one file per station and year from data.meteostat.net (UTC). Meteostat fills gaps with model forecasts;
+  those values are dropped unless you tick *Fill gaps with Meteostat model data*. Gaps of up to 6 hours are interpolated,
+  and years with under 80% of the May–September hours are not counted. Station list © Meteostat, CC BY 4.0. Check
+  meteostat.net's terms for the hourly data before commercial use.
+* **NOAA ISD**: station reports. Where several reports fall near an hour, the one nearest the hour is used.
 * **Met Office MIDAS Open**: the authoritative UK record, which needs a CEDA account. You can upload its yearly BADC-CSV files.
 * All times are UTC/GMT, matching CIBSE files.
         """

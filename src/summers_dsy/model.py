@@ -72,7 +72,8 @@ def to_hourly(values: pd.Series, max_gap_hours: int = 6) -> pd.Series:
 
     For sub-hourly or irregular observations each hour takes the report(s)
     nearest to it (e.g. an on-the-hour SYNOP in preference to a :50 METAR),
-    averaging exact ties; gaps of up to ``max_gap_hours`` are linearly interpolated.
+    averaging exact ties. Gaps of up to ``max_gap_hours`` missing hours are linearly
+    interpolated; longer gaps are left empty.
     """
     values = values.dropna()
     if values.empty:
@@ -83,8 +84,20 @@ def to_hourly(values: pd.Series, max_gap_hours: int = 6) -> pd.Series:
     keep = (offset == nearest).to_numpy()
     rounded = values[keep].groupby(hour[keep]).mean()
     full = pd.date_range(rounded.index.min(), rounded.index.max(), freq="h")
-    hourly = rounded.reindex(full)
-    return hourly.interpolate(limit=max_gap_hours, limit_area="inside")
+    return fill_short_gaps(rounded.reindex(full), max_gap_hours)
+
+
+def fill_short_gaps(values: pd.Series, max_len: int) -> pd.Series:
+    """Linearly interpolate runs of at most ``max_len`` missing values between two values.
+
+    Longer runs, and missing values at either end, are left missing.
+    """
+    missing = values.isna()
+    if max_len <= 0 or not missing.any():
+        return values
+    run_len = missing.groupby((~missing).cumsum()).transform("sum")
+    filled = values.interpolate(limit_area="inside")
+    return filled.where(~missing | (run_len <= max_len))
 
 
 def nominal_index(months, days, hours_ending) -> tuple[pd.DatetimeIndex, np.ndarray]:

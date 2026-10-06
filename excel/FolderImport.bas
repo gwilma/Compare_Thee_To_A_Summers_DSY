@@ -52,23 +52,34 @@ Public Sub UseLibraryThresholdsSilent()
 End Sub
 
 Private Sub ApplyLibraryThresholds()
-    Dim tbl As Variant, r As Long, loc As String
+    Dim loc As String, sw As Double, tw As Double
     loc = Trim$(CStr(NR("compare_loc").Value))
+    If LibraryThresholdsFor(loc, sw, tw) Then
+        NR("swcdh_override").Value = sw
+        NR("twcdh_override").Value = tw
+        Application.Calculate
+        Say "Settings now use the thresholds stored for " & IIf(loc = "", "the first included file", loc) & ": SWCDH " & _
+            Format$(sw, "0.00") & " °C, TWCDH offset " & Format$(tw, "0.00") & " K."
+    Else
+        Say "No included Library row" & IIf(loc = "", "", " for " & loc) & " has stored thresholds."
+    End If
+End Sub
+
+Private Function LibraryThresholdsFor(ByVal loc As String, ByRef sw As Double, ByRef tw As Double) As Boolean
+    ' Thresholds stored with the first included Library row of the location (any location if blank).
+    Dim tbl As Variant, r As Long
     tbl = NR("lib_table").Value
     For r = 1 To UBound(tbl, 1)
         If CStr(tbl(r, 1)) = "1" And (loc = "" Or LCase$(CStr(tbl(r, 2))) = LCase$(loc)) Then
             If IsNumeric(tbl(r, ColSwcdh())) And Not IsEmpty(tbl(r, ColSwcdh())) And Not IsEmpty(tbl(r, ColTwcdh())) Then
-                NR("swcdh_override").Value = tbl(r, ColSwcdh())
-                NR("twcdh_override").Value = tbl(r, ColTwcdh())
-                Application.Calculate
-                Say "Settings now use the thresholds stored for " & CStr(tbl(r, 2)) & ": SWCDH " & _
-                    Format$(tbl(r, ColSwcdh()), "0.00") & " °C, TWCDH offset " & Format$(tbl(r, ColTwcdh()), "0.00") & " K."
-                Exit Sub
+                sw = CDbl(tbl(r, ColSwcdh()))
+                tw = CDbl(tbl(r, ColTwcdh()))
+                LibraryThresholdsFor = True
+                Exit Function
             End If
         End If
     Next r
-    Say "No included Library row" & IIf(loc = "", "", " for " & loc) & " has stored thresholds."
-End Sub
+End Function
 
 ' ------------------------------------------------------------------ main loop
 
@@ -155,7 +166,7 @@ Private Sub RunImport(ByVal folder As String)
 
 Finish:
     On Error Resume Next
-    NR("hourly_input").Value = savedInput
+    SetHourly savedInput
     NR("cyclic").Value = savedCyclic
     NR("swcdh_override").Value = savedS
     NR("twcdh_override").Value = savedT
@@ -237,7 +248,7 @@ Private Function LoadFile(ByVal path As String, ByVal typical As Boolean, ByRef 
         msg = "Only " & n & " hours of data (at least " & MIN_HOURS & " needed)"
         Exit Function
     End If
-    NR("hourly_input").Value = data
+    SetHourly data
     NR("cyclic").Value = IIf(typical, "Yes", "No")
     LoadFile = True
     Exit Function
@@ -639,7 +650,7 @@ Private Sub StartLog(ByVal folder As String, ByVal nFiles As Long)
     Dim ws As Worksheet
     Set ws = NR("log_start").Worksheet
     ws.Range(ws.Cells(NR("log_start").Row, 1), ws.Cells(ws.Rows.Count, 10)).ClearContents
-    ws.Cells(2, 1).Value = "Last import: " & folder & " (" & nFiles & " weather files found) at " & Format$(Now, "yyyy-mm-dd hh:nn")
+    ws.Cells(2, 1).Value = "Last import: " & folder & " (" & nFiles & " weather files found) at " & Format$(Now, "yyyy-mm-dd hh:mm")
     mLogRow = NR("log_start").Row
 End Sub
 
@@ -653,6 +664,12 @@ Private Sub LogLine(ByVal path As String, ByVal result As String, ByVal loc As S
 End Sub
 
 ' ------------------------------------------------------------------ helpers
+
+Private Sub SetHourly(data As Variant)
+    ' Clear first: assigning Empty array elements does not clear cells in every spreadsheet program.
+    NR("hourly_input").ClearContents
+    NR("hourly_input").Value = data
+End Sub
 
 Private Function NMetrics() As Long
     NMetrics = NR("summary_values").Rows.Count
@@ -736,4 +753,436 @@ Private Function MaxOf(ParamArray v() As Variant) As Long
     For i = 1 To UBound(v)
         If v(i) > MaxOf Then MaxOf = v(i)
     Next i
+End Function
+
+
+' ================================================================== Meteostat: several years
+'
+' DownloadMeteostatYears downloads one file per year for the station on the Meteostat sheet
+' (https://data.meteostat.net/hourly/<year>/<station>.csv.gz, plus the December before the first
+' year), analyses each year with the Compare location's thresholds and writes it to the Years sheet.
+' Files already in the download folder (<station>_<year>.csv) are reused, so on a Mac or offline the
+' files can be saved there by hand. Downloading itself needs Excel for Windows.
+
+Private Const MS_URL As String = "https://data.meteostat.net/hourly/"
+Private Const MAX_GAP_HOURS As Long = 6
+Private Const MIN_SEASON_COVERAGE As Double = 0.8
+Private Const MAX_YEARS As Long = 80
+
+Public Sub DownloadMeteostatYears()
+    mSilent = False
+    RunMeteostat
+End Sub
+
+Public Sub DownloadMeteostatYearsSilent()
+    mSilent = True
+    RunMeteostat
+End Sub
+
+Private Sub RunMeteostat()
+    Dim id As String, stKey As String, y0 As Long, y1 As Long, y As Long, includeModel As Boolean
+    Dim folder As String, sep As String, loc As String, thrNote As String, msg As String
+    Dim savedInput As Variant, savedCyclic As Variant, calcMode As Long, t0 As Double
+    Dim notes() As String, nOk As Long, nSkip As Long, sw As Double, tw As Double
+    Dim prevPath As String, curPath As String, modelShare As Double, cov As Variant
+
+    id = Trim$(CStr(NR("ms_station_id").Value))
+    stKey = CStr(NR("ms_key").Value)
+    If Len(id) = 0 Then
+        Say "Choose a station on the Meteostat sheet first."
+        Exit Sub
+    End If
+    If Not IsNumeric(NR("ms_year_from").Value) Or Not IsNumeric(NR("ms_year_to").Value) Or _
+       IsBlank(NR("ms_year_from").Value) Or IsBlank(NR("ms_year_to").Value) Then
+        Say "Enter the first and last years on the Meteostat sheet."
+        Exit Sub
+    End If
+    y0 = CLng(NR("ms_year_from").Value)
+    y1 = CLng(NR("ms_year_to").Value)
+    If y1 < y0 Or y1 - y0 + 1 > MAX_YEARS Then
+        Say "Choose between 1 and " & MAX_YEARS & " years, with the last year after the first."
+        Exit Sub
+    End If
+    includeModel = (LCase$(Left$(Trim$(CStr(NR("ms_include_model").Value)), 1)) = "y")
+    folder = MeteostatFolder()
+    sep = PathSep(folder)
+    loc = Trim$(CStr(NR("compare_loc").Value))
+
+    savedInput = NR("hourly_input").Value
+    savedCyclic = NR("cyclic").Value
+    calcMode = Application.Calculation
+    t0 = Timer
+    ReDim notes(y0 To y1)
+
+    On Error GoTo Failed
+    Application.ScreenUpdating = False
+    Application.Calculation = -4135   ' xlCalculationManual
+
+    ' Analyse with the Compare location's thresholds, so the years compare like-for-like with its files.
+    thrNote = "Settings thresholds"
+    If Len(loc) > 0 Then
+        If LibraryThresholdsFor(loc, sw, tw) Then
+            NR("swcdh_override").Value = sw
+            NR("twcdh_override").Value = tw
+            thrNote = loc & " thresholds (now also in Settings)"
+        End If
+    End If
+
+    ' Download what is missing (the December before the first year starts the running mean).
+    For y = y0 - 1 To y1
+        curPath = folder & sep & id & "_" & y & ".csv"
+        If Not FileExists(curPath) Then
+            msg = ""
+            If Not DownloadMeteostat(id, y, curPath, msg) Then
+                If y >= y0 Then
+                    notes(y) = msg
+                End If
+            End If
+        End If
+    Next y
+
+    For y = y0 To y1
+        prevPath = folder & sep & id & "_" & (y - 1) & ".csv"
+        curPath = folder & sep & id & "_" & y & ".csv"
+        If Not FileExists(curPath) Then
+            If Len(notes(y)) = 0 Then
+                notes(y) = "No file"
+            End If
+            WriteYearRow y, stKey, id, Empty, Empty, notes(y), False
+            nSkip = nSkip + 1
+        Else
+            msg = ""
+            If Not LoadMeteostatYear(prevPath, curPath, y, includeModel, modelShare, msg) Then
+                WriteYearRow y, stKey, id, Empty, Empty, msg, False
+                nSkip = nSkip + 1
+            Else
+                Application.Calculate
+                cov = NR("season_coverage").Value
+                If Not IsNumeric(cov) Then
+                    cov = 0
+                End If
+                If cov < MIN_SEASON_COVERAGE Then
+                    WriteYearRow y, stKey, id, cov, modelShare, "Only " & Format$(cov * 100, "0") & _
+                        "% of the season has data: not counted", False
+                    nSkip = nSkip + 1
+                Else
+                    WriteYearRow y, stKey, id, cov, modelShare, IIf(includeModel, "Model data included", ""), True
+                    nOk = nOk + 1
+                End If
+            End If
+        End If
+    Next y
+    SortYears
+
+Finish:
+    On Error Resume Next
+    SetHourly savedInput
+    NR("cyclic").Value = savedCyclic
+    Application.Calculation = calcMode
+    Application.Calculate
+    Application.ScreenUpdating = True
+    NR("ms_status").Value = Format$(Now, "yyyy-mm-dd hh:mm") & ": " & stKey & " " & y0 & "–" & y1 & ": " & nOk & _
+        " year(s) analysed, " & nSkip & " not counted; " & thrNote & "; files in " & folder & " (" & Format$(Timer - t0, "0") & " s)"
+    Say nOk & " year(s) analysed and " & nSkip & " not counted. See the Years and Years vs DSY sheets."
+    Exit Sub
+
+Failed:
+    NR("ms_status").Value = "Error: " & Err.Description
+    Resume Finish
+End Sub
+
+Private Function MeteostatFolder() As String
+    Dim f As String
+    f = Trim$(CStr(NR("ms_folder").Value))
+    If Len(f) = 0 Then
+        f = Environ$("TEMP")
+        If Len(f) = 0 Then
+            f = Environ$("TMPDIR")
+        End If
+        If Len(f) = 0 Then
+            f = ThisWorkbook.Path
+        End If
+        f = StripSep(f) & PathSep(f) & "summers_dsy_meteostat"
+    End If
+    f = StripSep(f)
+    On Error Resume Next
+    If Len(Dir$(f, vbDirectory)) = 0 Then
+        MkDir f
+    End If
+    MeteostatFolder = f
+End Function
+
+Private Function FileExists(ByVal path As String) As Boolean
+    On Error Resume Next
+    FileExists = (Len(Dir$(path)) > 0)
+End Function
+
+Private Function DownloadMeteostat(ByVal id As String, ByVal y As Long, ByVal csvPath As String, ByRef msg As String) As Boolean
+    ' Windows: MSXML2 (uses the system proxy) saves the gzip file; PowerShell unzips it.
+    Dim url As String, gzPath As String, http As Object, stream As Object
+    url = MS_URL & y & "/" & id & ".csv.gz"
+    gzPath = csvPath & ".gz"
+    On Error GoTo NoDownload
+    Set http = CreateObject("MSXML2.XMLHTTP.6.0")
+    http.Open "GET", url, False
+    http.send
+    If http.Status = 404 Then
+        msg = "Meteostat has no file for " & y
+        Exit Function
+    End If
+    If http.Status <> 200 Then
+        msg = "Download failed (HTTP " & http.Status & ")"
+        Exit Function
+    End If
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 1
+    stream.Open
+    stream.Write http.responseBody
+    stream.SaveToFile gzPath, 2
+    stream.Close
+    If Not Gunzip(gzPath, csvPath, msg) Then
+        Exit Function
+    End If
+    On Error Resume Next
+    Kill gzPath
+    DownloadMeteostat = True
+    Exit Function
+NoDownload:
+    msg = "Could not download (" & Err.Description & "). Save " & url & ", unzipped, as " & csvPath
+End Function
+
+Private Function Gunzip(ByVal gzPath As String, ByVal csvPath As String, ByRef msg As String) As Boolean
+    Dim cmd As String, rc As Long
+    cmd = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""$i=[IO.File]::OpenRead('" & Replace(gzPath, "'", "''") & _
+          "');$o=[IO.File]::Create('" & Replace(csvPath, "'", "''") & "');" & _
+          "$g=New-Object IO.Compression.GZipStream($i,[IO.Compression.CompressionMode]::Decompress);" & _
+          "$g.CopyTo($o);$g.Dispose();$o.Dispose();$i.Dispose()"""
+    On Error GoTo Failed
+    rc = CreateObject("WScript.Shell").Run(cmd, 0, True)
+    Gunzip = (rc = 0 And FileExists(csvPath))
+    If Not Gunzip Then
+        msg = "Could not unzip the downloaded file"
+    End If
+    Exit Function
+Failed:
+    msg = "Could not unzip the downloaded file (" & Err.Description & ")"
+End Function
+
+Private Function LoadMeteostatYear(ByVal prevPath As String, ByVal curPath As String, ByVal y As Long, _
+                                   ByVal includeModel As Boolean, ByRef modelShare As Double, ByRef msg As String) As Boolean
+    ' The year's hours plus the previous December, on an hourly timeline; short gaps interpolated.
+    Dim start As Date, nH As Long, vals() As Double, has() As Boolean, i As Long, n As Long
+    Dim nModel As Long, nAll As Long, d As Date, data() As Variant, dummy1 As Long, dummy2 As Long
+    On Error GoTo Bad
+    start = DateSerial(y - 1, 12, 1)
+    nH = CLng((DateSerial(y + 1, 1, 1) - start) * 24)
+    ReDim vals(0 To nH - 1)
+    ReDim has(0 To nH - 1)
+    If FileExists(prevPath) Then
+        ReadMeteostatInto prevPath, start, nH, y - 1, 12, includeModel, vals, has, dummy1, dummy2
+    End If
+    ReadMeteostatInto curPath, start, nH, y, 0, includeModel, vals, has, nModel, nAll
+    If nAll = 0 Then
+        msg = "The file has no temperatures for " & y
+        Exit Function
+    End If
+    modelShare = nModel / nAll
+    FillShortGaps vals, has, MAX_GAP_HOURS
+
+    ReDim data(1 To MAX_HOURS, 1 To 5)
+    For i = 0 To nH - 1
+        If has(i) Then
+            n = n + 1
+            d = start + (i \ 24)
+            data(n, 1) = Year(d)
+            data(n, 2) = Month(d)
+            data(n, 3) = Day(d)
+            data(n, 4) = (i Mod 24) + 1
+            data(n, 5) = vals(i)
+        End If
+    Next i
+    SetHourly data
+    NR("cyclic").Value = "No"
+    LoadMeteostatYear = True
+    Exit Function
+Bad:
+    msg = "Could not read the file: " & Err.Description
+End Function
+
+Private Sub ReadMeteostatInto(ByVal path As String, ByVal start As Date, ByVal nH As Long, ByVal onlyYear As Long, _
+                              ByVal onlyMonth As Long, ByVal includeModel As Boolean, vals() As Double, has() As Boolean, _
+                              ByRef nModel As Long, ByRef nAll As Long)
+    ' Meteostat hourly CSV: a header row with year, month, day, hour, temp and temp_source columns.
+    Dim lines As Variant, cells As Variant, i As Long, c As Long, nm As String
+    Dim cY As Long, cM As Long, cD As Long, cH As Long, cT As Long, cS As Long
+    Dim yy As Long, mm As Long, dd As Long, hh As Long, v As String, src As String, isModel As Boolean, idx As Long
+    lines = Split(Replace(Replace(ReadAll(path), vbCrLf, vbLf), vbCr, vbLf), vbLf)
+    cells = Split(LCase$(CStr(lines(0))), ",")
+    cY = 0
+    cM = 1
+    cD = 2
+    cH = 3
+    cT = -1
+    cS = -1
+    For c = 0 To UBound(cells)
+        nm = Trim$(Replace(CStr(cells(c)), """", ""))
+        Select Case nm
+            Case "year"
+                cY = c
+            Case "month"
+                cM = c
+            Case "day"
+                cD = c
+            Case "hour"
+                cH = c
+            Case "temp"
+                cT = c
+            Case "temp_source"
+                cS = c
+        End Select
+    Next c
+    If cT < 0 Then
+        Exit Sub
+    End If
+    For i = 1 To UBound(lines)
+        If Len(lines(i)) > 0 Then
+            cells = Split(CStr(lines(i)), ",")
+            If UBound(cells) >= cT Then
+                v = Trim$(Replace(CStr(cells(cT)), """", ""))
+                If LooksNumeric(v) Then
+                    yy = CLng(Val(cells(cY)))
+                    mm = CLng(Val(cells(cM)))
+                    dd = CLng(Val(cells(cD)))
+                    hh = CLng(Val(cells(cH)))
+                    If yy = onlyYear And (onlyMonth = 0 Or mm = onlyMonth) Then
+                        src = ""
+                        If cS >= 0 And cS <= UBound(cells) Then
+                            src = LCase$(CStr(cells(cS)))
+                        End If
+                        isModel = (InStr(src, "mosmix") > 0 Or InStr(src, "forecast") > 0)
+                        nAll = nAll + 1
+                        If isModel Then
+                            nModel = nModel + 1
+                        End If
+                        If includeModel Or Not isModel Then
+                            idx = CLng((DateSerial(yy, mm, dd) - start) * 24) + hh
+                            If idx >= 0 And idx < nH Then
+                                vals(idx) = Val(v)
+                                has(idx) = True
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next i
+End Sub
+
+Private Sub FillShortGaps(vals() As Double, has() As Boolean, ByVal maxGap As Long)
+    ' Linear interpolation across runs of up to maxGap missing hours between two values.
+    Dim i As Long, j As Long, last As Long
+    last = -1
+    For i = LBound(vals) To UBound(vals)
+        If has(i) Then
+            If last >= 0 Then
+                If i - last - 1 > 0 And i - last - 1 <= maxGap Then
+                    For j = last + 1 To i - 1
+                        vals(j) = vals(last) + (vals(i) - vals(last)) * (j - last) / (i - last)
+                        has(j) = True
+                    Next j
+                End If
+            End If
+            last = i
+        End If
+    Next i
+End Sub
+
+Private Sub WriteYearRow(ByVal y As Long, ByVal stKey As String, ByVal id As String, ByVal cov As Variant, _
+                         ByVal modelShare As Variant, ByVal note As String, ByVal withMetrics As Boolean)
+    Dim tbl As Variant, yrs As Range, r As Long, k As Long, width As Long, out() As Variant, vals As Variant
+    Set yrs = NR("years_table")
+    tbl = yrs.Value
+    width = 6 + NMetrics() + 2
+    For r = 1 To UBound(tbl, 1)
+        If CStr(tbl(r, 1)) = CStr(y) And CStr(tbl(r, 2)) = stKey Then
+            Exit For
+        End If
+    Next r
+    If r > UBound(tbl, 1) Then
+        For r = 1 To UBound(tbl, 1)
+            If IsBlank(tbl(r, 1)) Then
+                Exit For
+            End If
+        Next r
+    End If
+    If r > UBound(tbl, 1) Then
+        Exit Sub
+    End If
+    ReDim out(1 To 1, 1 To width)
+    out(1, 1) = y
+    out(1, 2) = stKey
+    out(1, 3) = id
+    out(1, 4) = cov
+    out(1, 5) = modelShare
+    out(1, 6) = note
+    If withMetrics Then
+        vals = NR("summary_values").Value
+        For k = 1 To NMetrics()
+            out(1, 6 + k) = vals(k, 1)
+        Next k
+        out(1, width - 1) = NR("swcdh_thr").Value
+        out(1, width) = NR("twcdh_off").Value
+    End If
+    yrs.Cells(r, 3).NumberFormat = "@"
+    yrs.Cells(r, 1).Resize(1, width).Value = out
+End Sub
+
+Private Sub SortYears()
+    ' Order the Years table by station, then year (insertion sort; the table is small).
+    Dim yrs As Range, tbl As Variant, n As Long, r As Long, i As Long, j As Long, c As Long, w As Long
+    Dim order() As Long, tmp As Long, out() As Variant
+    Set yrs = NR("years_table")
+    tbl = yrs.Value
+    w = UBound(tbl, 2)
+    For r = 1 To UBound(tbl, 1)
+        If Not IsBlank(tbl(r, 1)) Then
+            n = n + 1
+        End If
+    Next r
+    If n < 2 Then
+        Exit Sub
+    End If
+    ReDim order(1 To n)
+    i = 0
+    For r = 1 To UBound(tbl, 1)
+        If Not IsBlank(tbl(r, 1)) Then
+            i = i + 1
+            order(i) = r
+        End If
+    Next r
+    For i = 2 To n
+        j = i
+        Do While j > 1
+            If SortKey(tbl, order(j - 1)) > SortKey(tbl, order(j)) Then
+                tmp = order(j - 1)
+                order(j - 1) = order(j)
+                order(j) = tmp
+                j = j - 1
+            Else
+                Exit Do
+            End If
+        Loop
+    Next i
+    ReDim out(1 To UBound(tbl, 1), 1 To w)
+    For i = 1 To n
+        For c = 1 To w
+            out(i, c) = tbl(order(i), c)
+        Next c
+    Next i
+    yrs.Columns(3).NumberFormat = "@"
+    yrs.Value = out
+End Sub
+
+Private Function SortKey(tbl As Variant, ByVal r As Long) As String
+    SortKey = LCase$(CStr(tbl(r, 2))) & "|" & Format$(CLng(tbl(r, 1)), "0000")
 End Function

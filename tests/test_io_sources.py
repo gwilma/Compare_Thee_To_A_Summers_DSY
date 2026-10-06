@@ -92,13 +92,6 @@ def test_isd_parse_filters_missing_and_bad_quality():
     assert hourly.tolist() == [35.1, 36.4]  # 12:00 SYNOP beats the 11:50 METAR
 
 
-def test_meteostat_parse():
-    csv = "2019-07-25,12,35.1,,,,,,,,,,\n2019-07-25,13,36.4,,,,,,,,,,\n"
-    t = fetchers.parse_meteostat(gzip.compress(csv.encode()))
-    assert t.index[1] == pd.Timestamp("2019-07-25 13:00")
-    assert t.iloc[1] == 36.4
-
-
 def test_open_meteo_fetch(monkeypatch):
     times = pd.date_range("2019-01-01", "2019-12-31 23:00", freq="h")
     payload = {"elevation": 25, "hourly": {"time": [t.strftime("%Y-%m-%dT%H:%M") for t in times], "temperature_2m": [12.0] * len(times)}}
@@ -112,17 +105,6 @@ def test_open_meteo_fetch(monkeypatch):
     s = fetchers.fetch_open_meteo(51.48, -0.45, 2019, 2019)
     assert seen["start_date"] == "2019-01-01" and seen["end_date"] == "2019-12-31"
     assert len(s.data) == 8760 and s.years == [2019]
-
-
-def test_meteostat_fetch_skips_missing_years(monkeypatch):
-    csv = "\n".join(f"2019-01-01,{h},{5 + h / 10},,,,,,,,,," for h in range(24))
-
-    def fake_get(url, **kw):
-        return gzip.compress(csv.encode()) if "/2019/" in url else None
-
-    monkeypatch.setattr(fetchers, "get_bytes", fake_get)
-    s = fetchers.fetch_meteostat("03772", 2018, 2019)
-    assert s.years == [2019]
 
 
 def test_midas_fetch_requires_token(monkeypatch):

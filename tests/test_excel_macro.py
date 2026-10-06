@@ -21,3 +21,10 @@ def test_folder_import_macro():
     result = subprocess.run([sys.executable, str(ROOT / "excel/test_folder_import.py")], capture_output=True, text=True,
                             timeout=3000)
     assert "RESULT: PASS" in result.stdout, result.stdout[-3000:] + result.stderr[-2000:]
+
+
+def test_meteostat_macro():
+    subprocess.run([sys.executable, str(ROOT / "excel/add_macros.py")], check=True, timeout=600)
+    result = subprocess.run([sys.executable, str(ROOT / "excel/test_meteostat_import.py")], capture_output=True,
+                            text=True, timeout=3000)
+    assert "RESULT: PASS" in result.stdout, result.stdout[-3000:] + result.stderr[-2000:]

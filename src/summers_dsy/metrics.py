@@ -266,6 +266,21 @@ DEFAULT_COMPARISON_METRICS = [
 ]
 
 
+def season_coverage(hourly: pd.DataFrame, config: AnalysisConfig) -> float:
+    """Share of the analysis year's season hours (May-September by default) that have a temperature.
+
+    Measured against the whole season, so a record that stops in August counts as incomplete.
+    The analysis year is the year of the last timestamp.
+    """
+    year = hourly.index.max().year
+    start = pd.Timestamp(year=year, month=config.season_start[0], day=config.season_start[1])
+    end = pd.Timestamp(year=year, month=config.season_end[0], day=config.season_end[1])
+    expected = ((end - start).days + 1) * 24
+    t = hourly["dry_bulb"]
+    in_season = (t.index >= start) & (t.index < end + pd.Timedelta(days=1))
+    return float(t[in_season].notna().sum() / expected)
+
+
 def analyse(series: WeatherSeries, config: AnalysisConfig | None = None) -> SeasonAnalysis:
     """Compute the daily table, hourly exceedances, warm events and summary metrics."""
     config = config or AnalysisConfig()
@@ -329,7 +344,7 @@ def analyse(series: WeatherSeries, config: AnalysisConfig | None = None) -> Seas
         "nights_above": int((sd["night_mean"] >= config.night_threshold).sum()),
         **season_means,
         "jja_mean_daily_max": float(jja_days["t_max"].mean()),
-        "season_coverage": float(hourly["dry_bulb"].notna().mean()),
+        "season_coverage": season_coverage(hourly_all, config),
     }
     return SeasonAnalysis(
         name=series.name,

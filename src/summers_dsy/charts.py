@@ -301,3 +301,35 @@ __all__ = [
     "profile_small_multiples",
     "similarity_bars",
 ]
+
+
+def station_map(candidates: pd.DataFrame, selected_id: str, origin: tuple[float, float] | None = None,
+                theme: str = "light") -> go.Figure:
+    """Candidate stations (grey), the selected station (slot 1) and the searched point (slot 2)."""
+    t = _theme(theme)
+    blue, orange, _ = t["series"]
+    sel = candidates[candidates["id"] == selected_id]
+    others = candidates[candidates["id"] != selected_id]
+    fig = go.Figure()
+    fig.add_trace(go.Scattermap(lat=others["latitude"], lon=others["longitude"], mode="markers", name="Stations",
+                                marker=dict(size=9, color="#898781"), text=others["label"], hoverinfo="text"))
+    fig.add_trace(go.Scattermap(lat=sel["latitude"], lon=sel["longitude"], mode="markers", name="Selected station",
+                                marker=dict(size=14, color=blue), text=sel["label"], hoverinfo="text"))
+    if origin:
+        fig.add_trace(go.Scattermap(lat=[origin[0]], lon=[origin[1]], mode="markers", name="Your site",
+                                    marker=dict(size=12, color=orange), hoverinfo="name"))
+    pts = pd.concat([candidates[["latitude", "longitude"]],
+                     pd.DataFrame([origin], columns=["latitude", "longitude"]) if origin else None])
+    lat_span = float(pts["latitude"].max() - pts["latitude"].min())
+    lon_span = float(pts["longitude"].max() - pts["longitude"].min())
+    span = max(lat_span, lon_span * 0.6, 0.05)
+    zoom = float(np.clip(np.log2(360 / span) - 1.2, 3.5, 11))
+    centre = dict(lat=float(pts["latitude"].mean()), lon=float(pts["longitude"].mean()))
+    if not sel.empty and len(candidates) > 20:  # a long name-search list: centre on the chosen station
+        centre, zoom = dict(lat=float(sel["latitude"].iloc[0]), lon=float(sel["longitude"].iloc[0])), 5.0
+    fig.update_layout(map=dict(style="open-street-map", center=centre, zoom=zoom), height=260,
+                      margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor=t["surface"],
+                      font=dict(family=FONT, color=t["ink2"], size=12),
+                      legend=dict(orientation="h", yanchor="top", y=0.99, xanchor="left", x=0.01,
+                                  bgcolor="rgba(255,255,255,0.8)" if theme != "dark" else "rgba(26,26,25,0.8)"))
+    return fig

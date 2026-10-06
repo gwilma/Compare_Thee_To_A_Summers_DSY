@@ -22,5 +22,8 @@ dev = ["pytest>=7"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+summers_dsy = ["sources/data/*.csv"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
