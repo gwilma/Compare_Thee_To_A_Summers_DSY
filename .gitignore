@@ -4,4 +4,4 @@ __pycache__/
 .pytest_cache/
 .venv/
 # Local data: the DSY library (derived from licensed CIBSE files) and download cache
-data/
+/data/
