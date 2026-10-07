@@ -410,12 +410,12 @@ with tab_obs:
                 m = a.metrics
                 cols = st.columns(5)
                 rp = return_periods(table["wcdh"])
-                cols[0].metric("WCDH", fmt("wcdh", m["wcdh"]),
+                cols[0].metric("WCDH (K²h)", f"{m['wcdh']:,.0f}",
                                help=f"Rank {rp.loc[sel, 'rank']} of {len(rp)} years (≈ 1-in-{rp.loc[sel, 'return_period']:.1f})")
-                cols[1].metric("Peak temperature", fmt("t_max", m["t_max"]))
-                cols[2].metric("Longest warm event", fmt("max_event_duration", m["max_event_duration"]))
-                cols[3].metric(f"Hours > Tmax (Cat {CONFIG.category})", fmt("hours_above_upper", m["hours_above_upper"]))
-                cols[4].metric(f"Nights ≥ {CONFIG.night_threshold:g} °C", fmt("nights_above", m["nights_above"]),
+                cols[1].metric("Peak temp. (°C)", f"{m['t_max']:.1f}")
+                cols[2].metric("Longest warm spell (days)", f"{m['max_event_duration']:.0f}")
+                cols[3].metric(f"Hours > Tmax (Cat {CONFIG.category})", f"{m['hours_above_upper']:,.0f}")
+                cols[4].metric(f"Nights ≥ {CONFIG.night_threshold:g} °C", f"{m['nights_above']:.0f}",
                                help=f"Nights ({CONFIG.night_start_hour:02d}:00–{CONFIG.night_end_hour:02d}:00) with a mean outdoor "
                                     f"temperature at or above the threshold. Warmest night: {m['night_max_mean']:.1f} °C. "
                                     "TM59:2026 allows bedrooms no more than 4 nights with a mean of 27 °C or more.")

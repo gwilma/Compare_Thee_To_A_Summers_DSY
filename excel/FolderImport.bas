@@ -23,6 +23,12 @@ Private Const COL_METRICS As Long = 8      ' Library column H: the metrics start
 Private Const MAX_HOURS As Long = 10000
 Private Const MIN_HOURS As Long = 4000     ' fewer than this cannot cover a season plus spin-up
 
+' Meteostat download (DownloadMeteostatYears)
+Private Const MS_URL As String = "https://data.meteostat.net/hourly/"
+Private Const MAX_GAP_HOURS As Long = 6
+Private Const MIN_SEASON_COVERAGE As Double = 0.8
+Private Const MAX_YEARS As Long = 80
+
 Private mSilent As Boolean
 Private mLogRow As Long
 
@@ -764,10 +770,6 @@ End Function
 ' Files already in the download folder (<station>_<year>.csv) are reused, so on a Mac or offline the
 ' files can be saved there by hand. Downloading itself needs Excel for Windows.
 
-Private Const MS_URL As String = "https://data.meteostat.net/hourly/"
-Private Const MAX_GAP_HOURS As Long = 6
-Private Const MIN_SEASON_COVERAGE As Double = 0.8
-Private Const MAX_YEARS As Long = 80
 
 Public Sub DownloadMeteostatYears()
     mSilent = False

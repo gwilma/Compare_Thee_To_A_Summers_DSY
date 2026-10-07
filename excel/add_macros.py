@@ -20,6 +20,8 @@ import time
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 HERE = Path(__file__).resolve().parent
 BAS = HERE / "FolderImport.bas"
 
@@ -151,6 +153,11 @@ def inject(xlsx: Path, xlsm: Path, vba: bytes) -> None:
 
 
 def main(src: str | None = None, dst: str | None = None) -> Path:
+    from lint_vba import lint
+
+    problems = lint(BAS)
+    if problems:  # Excel is stricter than LibreOffice: refuse to build a module Excel would reject
+        raise SystemExit("FolderImport.bas fails the Excel checks:\n" + "\n".join(problems))
     xlsx = Path(src) if src else HERE / "summers_dsy.xlsx"
     xlsm = Path(dst) if dst else xlsx.with_suffix(".xlsm")
     lo = LibreOffice(port=int(os.environ.get("LO_PORT", 2002)))

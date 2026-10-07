@@ -71,6 +71,8 @@ values. **Compare** then ranks the library. Start with the *Read me* sheet. It s
 
 Everything is recorded on the **Import log** sheet.
 
+`python excel/lint_vba.py` checks `FolderImport.bas` against rules that Excel enforces but LibreOffice does not; `add_macros.py` runs it before building.
+
 `python excel/build_workbook.py` regenerates the `.xlsx`. `python excel/add_macros.py` then compiles
 `FolderImport.bas` into the `.xlsm` (this needs LibreOffice and `python3-uno`).
 `python excel/verify_workbook.py <recalculated.xlsx>` checks every metric and the similarity ranking against the
