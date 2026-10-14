@@ -48,6 +48,11 @@ Station data © Meteostat (CC BY 4.0). Check meteostat.net's terms for the hourl
 `scripts/deploy_vps.sh` installs the app as a service behind nginx, with a password and optional HTTPS.
 Re-run it to update.
 
+If Traefik already serves ports 80/443 (Hostinger's Docker templates install it), the script instead runs the app
+as a Docker container (`Dockerfile`) behind that Traefik. It uses Traefik's HTTPS certificates and a Traefik
+password check, and leaves the other sites behind Traefik alone. This mode needs a `DOMAIN`.
+`scripts/deploy_traefik.sh` does that part.
+
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/gwilma/Compare_Thee_To_A_Summers_DSY/claude/weather-overheating-analysis-y14bhk/scripts/deploy_vps.sh
 sudo DOMAIN=dsy.example.com EMAIL=you@example.com bash deploy_vps.sh   # or just: sudo bash deploy_vps.sh

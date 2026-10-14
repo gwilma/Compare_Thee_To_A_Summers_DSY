@@ -19,6 +19,12 @@
 #   CEDA_TOKEN     CEDA access token for MIDAS Open downloads
 #   BRANCH         git branch  (default: claude/weather-overheating-analysis-y14bhk)
 #   REPO_URL       git URL     (default: the GitHub repository)
+#   MODE           nginx or traefik (default: traefik if a Traefik container already
+#                  serves ports 80/443, as on Hostinger's Docker templates; else nginx)
+#
+# With Traefik (MODE=traefik) the app runs as a Docker container that Traefik routes to,
+# using Traefik's own HTTPS certificates; nginx, ufw and certbot are not used, so other
+# sites behind that Traefik are left alone. A DOMAIN is required in that mode.
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/gwilma/Compare_Thee_To_A_Summers_DSY.git}"
@@ -40,14 +46,58 @@ die() { printf '\033[1;31mError: %s\033[0m\n' "$*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "run as root (e.g. sudo bash $0)"
 command -v apt-get >/dev/null || die "this script is for Ubuntu/Debian"
 
+traefik_running() {  # a Traefik container serving ports 80/443 (published, or on the host network)
+    command -v docker >/dev/null || return 1
+    local ports
+    ports=$(docker ps --format '{{.Image}}|{{.Ports}}' 2>/dev/null | awk -F'|' 'tolower($1) ~ /(^|\/)traefik([:@]|$)/ {print $2 "|"}')
+    [[ -n "$ports" ]] || return 1
+    grep -qE ':(80|443)->' <<<"$ports" && return 0
+    ss -tlnpH '( sport = :80 or sport = :443 )' 2>/dev/null | grep -q '"traefik"'
+}
+MODE="${MODE:-}"
+if [[ -z "$MODE" ]]; then
+    if traefik_running; then MODE=traefik; else MODE=nginx; fi
+fi
+[[ "$MODE" == nginx || "$MODE" == traefik ]] || die "MODE must be nginx or traefik"
+if [[ "$MODE" == traefik ]]; then
+    echo "Traefik already serves ports 80/443 on this server: the app will run as a Docker container behind it."
+    [[ -n "$DOMAIN" ]] || die "behind Traefik the app needs a domain name. Point a DNS A record (e.g. dsy.yourdomain.com)
+at this server, then re-run with: sudo DOMAIN=dsy.yourdomain.com bash $0"
+fi
+
 log "Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q python3 python3-venv python3-pip git nginx apache2-utils ufw curl
+if [[ "$MODE" == traefik ]]; then
+    apt-get install -y -q git apache2-utils curl
+else
+    apt-get install -y -q python3 python3-venv python3-pip git nginx apache2-utils ufw curl
+fi
 
 log "Creating app user '${APP_USER}'"
 id "$APP_USER" &>/dev/null || adduser --disabled-password --gecos "" "$APP_USER"
 install -d -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
+
+set_password() {
+    log "Setting the site password"
+    install -d -m 755 "$(dirname "$HTPASSWD")"
+    if [[ -n "$AUTH_PASSWORD" ]]; then
+        htpasswd -bcB "$HTPASSWD" "$AUTH_USER" "$AUTH_PASSWORD" 2>/dev/null
+    elif [[ ! -s "$HTPASSWD" ]]; then
+        if [[ -t 0 ]]; then
+            echo "Choose a password for user '${AUTH_USER}':"
+            htpasswd -cB "$HTPASSWD" "$AUTH_USER"
+        else
+            AUTH_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
+            htpasswd -bcB "$HTPASSWD" "$AUTH_USER" "$AUTH_PASSWORD" 2>/dev/null
+            GENERATED_PASSWORD="$AUTH_PASSWORD"
+        fi
+    else
+        echo "Keeping the existing password in ${HTPASSWD}"
+    fi
+    if getent group www-data >/dev/null; then chown root:www-data "$HTPASSWD"; fi
+    chmod 640 "$HTPASSWD"
+}
 
 log "Fetching code (${BRANCH})"
 git_auth=()
@@ -64,12 +114,7 @@ else
         || die "clone failed; if the repository is private, set GITHUB_TOKEN"
 fi
 
-log "Installing Python packages"
-[[ -x "${APP_DIR}/.venv/bin/python" ]] || sudo -u "$APP_USER" python3 -m venv "${APP_DIR}/.venv"
-sudo -u "$APP_USER" "${APP_DIR}/.venv/bin/pip" install -q --upgrade pip
-sudo -u "$APP_USER" "${APP_DIR}/.venv/bin/pip" install -q -e "$APP_DIR"
-
-log "Writing systemd service"
+log "Writing settings"
 ENV_FILE="/etc/dsy.env"
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "SUMMERS_DSY_DATA=${DATA_DIR}" > "$ENV_FILE"
@@ -80,6 +125,36 @@ if [[ -n "${CEDA_TOKEN:-}" ]]; then
 fi
 chmod 600 "$ENV_FILE"
 
+if [[ "$MODE" == traefik ]]; then
+    set_password
+    log "Retiring the nginx set-up from earlier runs, if any"
+    systemctl disable --now dsy 2>/dev/null || true
+    if [[ -e /etc/nginx/sites-enabled/dsy ]]; then
+        rm -f /etc/nginx/sites-enabled/dsy
+        systemctl disable --now nginx 2>/dev/null || true  # it cannot run alongside Traefik on port 80
+    fi
+    export DOMAIN APP_DIR DATA_DIR APP_USER HTPASSWD ENV_FILE
+    bash "${APP_DIR}/scripts/deploy_traefik.sh"
+    cat <<EOF
+
+Done. Open: https://${DOMAIN}
+(Traefik fetches the certificate on the first visit, so that can take a few seconds.)
+Login user: ${AUTH_USER}${GENERATED_PASSWORD:+
+Password:   ${GENERATED_PASSWORD}   (generated; to change it, run: htpasswd -B ${HTPASSWD} ${AUTH_USER}, then re-run this script)}
+
+Update later: re-run this script.
+App logs:     docker logs -f summers-dsy
+Your data:    ${DATA_DIR} (back this up)
+EOF
+    exit 0
+fi
+
+log "Installing Python packages"
+[[ -x "${APP_DIR}/.venv/bin/python" ]] || sudo -u "$APP_USER" python3 -m venv "${APP_DIR}/.venv"
+sudo -u "$APP_USER" "${APP_DIR}/.venv/bin/pip" install -q --upgrade pip
+sudo -u "$APP_USER" "${APP_DIR}/.venv/bin/pip" install -q -e "$APP_DIR"
+
+log "Writing systemd service"
 cat > /etc/systemd/system/dsy.service <<EOF
 [Unit]
 Description=Compare thee to a summer's DSY
@@ -100,23 +175,7 @@ systemctl daemon-reload
 systemctl enable -q dsy
 systemctl restart dsy
 
-log "Setting the site password"
-if [[ -n "$AUTH_PASSWORD" ]]; then
-    htpasswd -bcB "$HTPASSWD" "$AUTH_USER" "$AUTH_PASSWORD" 2>/dev/null
-elif [[ ! -s "$HTPASSWD" ]]; then
-    if [[ -t 0 ]]; then
-        echo "Choose a password for user '${AUTH_USER}':"
-        htpasswd -cB "$HTPASSWD" "$AUTH_USER"
-    else
-        AUTH_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
-        htpasswd -bcB "$HTPASSWD" "$AUTH_USER" "$AUTH_PASSWORD" 2>/dev/null
-        GENERATED_PASSWORD="$AUTH_PASSWORD"
-    fi
-else
-    echo "Keeping the existing password in ${HTPASSWD}"
-fi
-chown root:www-data "$HTPASSWD"
-chmod 640 "$HTPASSWD"
+set_password
 
 log "Configuring nginx"
 cat > /etc/nginx/sites-available/dsy <<EOF
