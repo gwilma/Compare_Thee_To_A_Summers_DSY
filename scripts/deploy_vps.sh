@@ -145,7 +145,19 @@ EOF
 ln -sf /etc/nginx/sites-available/dsy /etc/nginx/sites-enabled/dsy
 rm -f /etc/nginx/sites-enabled/default
 nginx -t -q
-systemctl reload nginx
+systemctl enable -q nginx
+if systemctl is-active -q nginx; then
+    systemctl reload nginx
+elif ! systemctl start nginx; then
+    # Usually another web server (Apache, OpenLiteSpeed, Caddy, a Docker container) already holds port 80.
+    echo
+    echo "nginx could not start. Programs using ports 80/443:"
+    ss -tlnpH '( sport = :80 or sport = :443 )' 2>/dev/null | awk '{print "  " $4 "  " $6}' || true
+    echo
+    echo "Last nginx messages:"
+    journalctl -u nginx -n 5 --no-pager 2>/dev/null | sed 's/^/  /' || true
+    die "free ports 80 and 443 (stop and disable the program listed above, e.g. 'systemctl disable --now apache2'), then re-run this script. The app itself is already running on 127.0.0.1:${PORT}."
+fi
 
 log "Opening the firewall (SSH, HTTP, HTTPS)"
 ssh_port=$(ss -tlnpH 2>/dev/null | awk '/sshd/ {sub(/.*:/, "", $4); print $4; exit}')
