@@ -39,6 +39,29 @@ def test_library_update_and_delete(library):
     assert first not in library.entries()["id"].tolist()
 
 
+def test_library_save_table_unchanged(library):
+    # The app's "Save changes" writes every row back; blank emissions/percentile cells come back as NaN.
+    table = library.entries()
+    assert table["emissions"].isna().any()
+    for _, r in table.iterrows():
+        library.update(int(r["id"]), **{k: r[k] for k in ("location", "kind", "period", "emissions", "percentile")})
+    pd.testing.assert_frame_equal(library.entries().drop(columns="added_at"), table.drop(columns="added_at"))
+
+
+def test_library_update_reports_duplicate(library):
+    table = library.entries()
+    dsy2 = table[(table["kind"] == "DSY2") & (table["period"] == "Baseline")].iloc[0]
+    with pytest.raises(ValueError, match="already has"):
+        library.update(int(dsy2["id"]), kind="DSY1")
+
+
+def test_library_add_with_blank_cells(library):
+    series, _ = next(iter(demo_library().values()))
+    library.add(series, "x.epw", {"location": "Test", "kind": "TRY", "period": "Baseline",
+                                  "emissions": float("nan"), "percentile": float("nan")})
+    assert len(library.entries("Test")) == 1
+
+
 def test_library_rejects_partial_year(tmp_path):
     lib = Library(tmp_path / "l.sqlite")
     s = synthetic_series("x")

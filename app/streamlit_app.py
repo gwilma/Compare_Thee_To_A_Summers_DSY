@@ -522,12 +522,19 @@ with tab_lib:
             key="lib_table",
         )
         if st.button("Save changes"):
+            problems = []
             for _, r in ed.iterrows():
                 if r["delete"]:
                     LIB.delete([int(r["id"])])
-                else:
+                    continue
+                try:
                     LIB.update(int(r["id"]), **{k: r[k] for k in ("location", "kind", "period", "emissions", "percentile")})
-            st.rerun()
+                except ValueError as exc:
+                    problems.append(f"{r['filename']}: {exc}")
+            if problems:
+                st.error("Not saved:\n\n" + "\n\n".join(problems))
+            else:
+                st.rerun()
     if st.button("Load synthetic demo set (not CIBSE data)"):
         for fname, (s, meta) in demo_library().items():
             LIB.add(s, fname, meta)

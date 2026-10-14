@@ -24,6 +24,19 @@ from .sources.http import data_dir
 
 META_FIELDS = ["location", "kind", "period", "emissions", "percentile"]
 
+
+def _text(value) -> str:
+    """A metadata value as text: None, NaN and pandas NA (blank cells in a table) become ""."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    return str(value).strip()
+
+
+def _percentile(value) -> int:
+    """Percentile as stored: 0 when blank."""
+    text = _text(value)
+    return int(float(text)) if text else 0
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reference_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +71,7 @@ class Library:
 
     def add(self, series: WeatherSeries, filename: str, meta: dict) -> int:
         """Store a typical-year file; replaces any entry with the same location/kind/period/scenario."""
-        missing = [f for f in ("location", "kind", "period") if not meta.get(f)]
+        missing = [f for f in ("location", "kind", "period") if not _text(meta.get(f))]
         if missing:
             raise ValueError(f"Missing metadata: {', '.join(missing)}")
         temps = series.dry_bulb.reindex(_HOURS)
@@ -67,11 +80,11 @@ class Library:
         temps = temps.interpolate(limit_direction="both").astype(np.float32)
         row = {
             "filename": filename,
-            "location": meta["location"],
-            "kind": meta["kind"],
-            "period": meta["period"],
-            "emissions": meta.get("emissions") or "",
-            "percentile": int(meta.get("percentile") or 0),
+            "location": _text(meta["location"]),
+            "kind": _text(meta["kind"]),
+            "period": _text(meta["period"]),
+            "emissions": _text(meta.get("emissions")),
+            "percentile": _percentile(meta.get("percentile")),
             "source_year": series.meta.get("source_year"),
             "meta": json.dumps({k: v for k, v in series.meta.items() if isinstance(v, (str, int, float, bool)) or v is None}),
             "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -85,16 +98,21 @@ class Library:
             return int(cur.lastrowid)
 
     def update(self, entry_id: int, **fields) -> None:
-        allowed = {k: v for k, v in fields.items() if k in META_FIELDS}
+        """Change a file's metadata. Raises ValueError if that would duplicate another file's."""
+        allowed = {k: (_percentile(v) if k == "percentile" else _text(v)) for k, v in fields.items() if k in META_FIELDS}
         if not allowed:
             return
-        if "emissions" in allowed:
-            allowed["emissions"] = allowed["emissions"] or ""
-        if "percentile" in allowed:
-            allowed["percentile"] = int(allowed["percentile"] or 0)
+        blank = [k for k in ("location", "kind", "period") if k in allowed and not allowed[k]]
+        if blank:
+            raise ValueError(f"{', '.join(blank)} cannot be blank")
         sets = ", ".join(f"{k} = ?" for k in allowed)
-        with closing(self._connect()) as con, con:
-            con.execute(f"UPDATE reference_files SET {sets} WHERE id = ?", [*allowed.values(), entry_id])
+        try:
+            with closing(self._connect()) as con, con:
+                con.execute(f"UPDATE reference_files SET {sets} WHERE id = ?", [*allowed.values(), entry_id])
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE" not in str(exc):
+                raise
+            raise ValueError("another library file already has this location, type, period, emissions and percentile") from None
 
     def delete(self, ids: list[int]) -> None:
         with closing(self._connect()) as con, con:
