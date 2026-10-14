@@ -33,7 +33,9 @@ from ..model import WeatherSeries, to_hourly
 from .http import SourceError, get_bytes
 
 OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
-NOAA_ISD_URL = "https://www.ncei.noaa.gov/data/global-hourly/access/{year}/{station}.csv"
+# NOAA's open-data mirror: the www.ncei.noaa.gov/data/global-hourly path now redirects to an index page.
+# NOAA has retired ISD; the archive ends in August 2025.
+NOAA_ISD_URL = "https://noaa-global-hourly-pds.s3.amazonaws.com/{year}/{station}.csv"
 MIDAS_URL = (
     "https://dap.ceda.ac.uk/badc/ukmo-midas-open/data/uk-hourly-weather-obs/"
     "dataset-version-{version}/{county}/{src:05d}_{site}/qc-version-1/"
@@ -41,8 +43,9 @@ MIDAS_URL = (
 )
 MIDAS_DEFAULT_VERSION = "202407"
 
-#: ISD quality codes treated as unusable (suspect or erroneous).
-ISD_BAD_QUALITY = set("2367")
+#: ISD quality codes treated as unusable (erroneous). Suspect values (2, 6) are kept: NOAA's automatic
+#: limits flag genuine record heat as suspect, e.g. Heathrow's 40.2 degC on 19 July 2022.
+ISD_BAD_QUALITY = set("37")
 
 ONE_DAY = 86400
 

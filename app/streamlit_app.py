@@ -413,8 +413,10 @@ with tab_obs:
                 cols[0].metric("WCDH (K²h)", f"{m['wcdh']:,.0f}",
                                help=f"Rank {rp.loc[sel, 'rank']} of {len(rp)} years (≈ 1-in-{rp.loc[sel, 'return_period']:.1f})")
                 cols[1].metric("Peak temp. (°C)", f"{m['t_max']:.1f}")
-                cols[2].metric("Longest warm spell (days)", f"{m['max_event_duration']:.0f}")
-                cols[3].metric(f"Hours > Tmax (Cat {CONFIG.category})", f"{m['hours_above_upper']:,.0f}")
+                cols[2].metric("Warm spell (d)", f"{m['max_event_duration']:.0f}",
+                               help="Longest run of consecutive days with daily WCDH above zero, in days.")
+                cols[3].metric("Hours > Tmax", f"{m['hours_above_upper']:,.0f}",
+                               help=f"Hours at least 1 K above the Category {CONFIG.category} upper limit (TM52 criterion 1, on outdoor air).")
                 cols[4].metric(f"Nights ≥ {CONFIG.night_threshold:g} °C", f"{m['nights_above']:.0f}",
                                help=f"Nights ({CONFIG.night_start_hour:02d}:00–{CONFIG.night_end_hour:02d}:00) with a mean outdoor "
                                     f"temperature at or above the threshold. Warmest night: {m['night_max_mean']:.1f} °C. "

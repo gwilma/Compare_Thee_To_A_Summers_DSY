@@ -110,7 +110,7 @@ spread across the compared files, and the distance is the weighted RMS differenc
 |---|---|
 | Open-Meteo historical API (ERA5 / ERA5-Land) | Free with no key, 1940 onwards. Reanalysis smooths peaks and urban heat islands. |
 | Meteostat (data.meteostat.net) | Free with no key. Station observations (ISD, METAR and others). Model gap-fill is dropped by default. |
-| NOAA ISD global-hourly | Free with no key. Raw SYNOP/METAR reports; the report nearest each hour is used. |
+| NOAA ISD global-hourly | Free with no key, from NOAA's open-data mirror. Raw SYNOP/METAR reports; the report nearest each hour is used. NOAA has retired ISD: the archive ends in August 2025. Readings that NOAA's checks flag as suspect are kept, because record heat (Heathrow's 40.2 °C) is flagged that way; erroneous ones are dropped. |
 | Met Office MIDAS Open (CEDA) | The authoritative UK record. Needs a CEDA access token (`CEDA_TOKEN`); alternatively, upload the yearly BADC-CSV files. |
 
 Downloads are cached in `data/cache`. The library is stored in `data/library.sqlite`. Both paths are git-ignored,

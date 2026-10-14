@@ -85,9 +85,10 @@ def test_isd_parse_filters_missing_and_bad_quality():
         '03772099999,2019-07-25T12:20:00,"+9999,9"\n'
         '03772099999,2019-07-25T12:50:00,"+0600,3"\n'
         '03772099999,2019-07-25T13:00:00,"+0364,5"\n'
+        '03772099999,2019-07-25T13:20:00,"+0370,2"\n'
     ).encode()
     t = fetchers.parse_isd(raw)
-    assert t.tolist() == [34.0, 35.1, 36.4]
+    assert t.tolist() == [34.0, 35.1, 36.4, 37.0]  # suspect (2) kept; erroneous (3) and missing dropped
     hourly = fetchers.to_hourly(t)
     assert hourly.tolist() == [35.1, 36.4]  # 12:00 SYNOP beats the 11:50 METAR
 

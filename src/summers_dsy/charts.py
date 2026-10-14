@@ -91,6 +91,15 @@ def _end_label(fig, x, y, text, t, row=None, col=None, dy=0):
     )
 
 
+def _spread(labels: list[tuple[float, str]], gap: float) -> list[tuple[float, str]]:
+    """Move end labels apart, keeping their order, so none sits within ``gap`` of the one below it."""
+    out = sorted(((float(y), text) for y, text in labels if pd.notna(y)), key=lambda p: p[0])
+    for i in range(1, len(out)):
+        if out[i][0] - out[i - 1][0] < gap:
+            out[i] = (out[i - 1][0] + gap, out[i][1])
+    return out
+
+
 # ------------------------------------------------------------------ profile
 
 
@@ -127,8 +136,10 @@ def daily_profile(analysis: SeasonAnalysis, theme: str = "light", title: str | N
         row=2, col=1,
     )
     last = d.dropna(subset=["t_max"]).index[-1]
-    for col, label, dy in (("t_max", "Daily max", 8), ("t_comf", "Tcomf", 0), ("t_min", "Daily min", -8)):
-        _end_label(fig, last, d.loc[last, col], label, t, row=1, col=1, dy=dy)
+    labels = [(d.loc[last, c], name) for c, name in (("t_max", "Daily max"), ("t_comf", "Tcomf"), ("t_min", "Daily min"))]
+    span = (y_range[1] - y_range[0]) if y_range else float(d[["t_max", "t_min"]].max().max() - d[["t_max", "t_min"]].min().min())
+    for y, label in _spread(labels, gap=0.08 * span):
+        _end_label(fig, last, y, label, t, row=1, col=1)
     fig.update_yaxes(title_text="°C", row=1, col=1, range=y_range)
     fig.update_yaxes(title_text="Range K", row=2, col=1)
     fig.update_layout(bargap=0.35)
